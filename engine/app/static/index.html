@@ -42,6 +42,27 @@
             <select id="peerLang"></select>
           </div>
         </div>
+        <div id="langProgressWrap" class="progress-row" hidden>
+          <div class="progress-meta">
+            <div class="progress-track"><div id="langProgressBar" class="progress-fill"></div></div>
+            <span id="langProgressText" class="progress-text">0%</span>
+          </div>
+          <button id="cancelLangBtn" class="danger-outline" type="button">Batal</button>
+        </div>
+        <div class="model-row">
+          <div class="field">
+            <label for="whisperModelSelect">Model Whisper (STT / Pengenal Suara)</label>
+            <select id="whisperModelSelect"></select>
+          </div>
+          <button id="applyWhisperBtn" type="button">Pakai Model</button>
+        </div>
+        <div id="whisperProgressWrap" class="progress-row" hidden>
+          <div class="progress-meta">
+            <div class="progress-track"><div id="whisperProgressBar" class="progress-fill"></div></div>
+            <span id="whisperProgressText" class="progress-text">0%</span>
+          </div>
+          <button id="cancelWhisperBtn" class="danger-outline" type="button">Batal</button>
+        </div>
       </section>
 
       <section class="section">

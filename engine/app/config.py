@@ -85,6 +85,15 @@ PIPER_VOICE_CATALOG: dict[str, dict[str, str]] = {
 }
 
 
+WHISPER_MODEL_CATALOG: list[dict[str, str]] = [
+    {"id": "tiny", "label": "Tiny · Tercepat (akurasi rendah)"},
+    {"id": "base", "label": "Base · Cepat"},
+    {"id": "small", "label": "Small · Seimbang (Recommended)"},
+    {"id": "medium", "label": "Medium · Akurasi tinggi (unduh ~770 MB)"},
+    {"id": "large-v3-turbo", "label": "Large v3 Turbo · Sangat tinggi (unduh ~810 MB)"},
+    {"id": "large-v3", "label": "Large v3 · Maksimal (berat di VRAM 3 GB)"},
+]
+
 NLLB_LANG_CODES: dict[str, str] = {
     "id": "ind_Latn",
     "en": "eng_Latn",
@@ -106,6 +115,12 @@ def piper_dir() -> Path:
 
 def nllb_dir() -> Path:
     path = Path(settings.models_dir) / "nllb"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def whisper_dir() -> Path:
+    path = Path(settings.models_dir) / "whisper"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

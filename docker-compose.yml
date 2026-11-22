@@ -4,10 +4,10 @@ services:
       context: ./engine
       dockerfile: Dockerfile
     container_name: realtime-translate
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8765", "--reload", "--reload-dir", "/app/app"]
     ports:
       - "8765:8765"
     environment:
-      - RT_WHISPER_MODEL=small
       - RT_WHISPER_DEVICE=auto
       - RT_WHISPER_COMPUTE_TYPE=int8
       - RT_WHISPER_CPU_THREADS=4

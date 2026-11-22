@@ -84,6 +84,77 @@ def test_web_ui_and_api_endpoints():
     codes = {item["code"] for item in res_langs.json()["languages"]}
     assert {"id", "en"}.issubset(codes)
 
+    res_whisper = client.get("/models/whisper")
+    assert res_whisper.status_code == 200
+    whisper_ids = {item["id"] for item in res_whisper.json()["models"]}
+    assert {"tiny", "base", "small", "medium", "large-v3-turbo", "large-v3"}.issubset(whisper_ids)
+
+
+def test_switch_whisper_model_endpoint(monkeypatch):
+    def fake_switch(model_name: str, cancel_event=None, on_progress=None):
+        if on_progress:
+            on_progress(50, 100, "model.bin")
+        return {
+            "active_model": model_name,
+            "active_device": "cuda",
+            "installed_models": ["tiny", "base", "small"],
+        }
+
+    monkeypatch.setattr(engine.stt, "switch_model", fake_switch)
+
+    client = TestClient(app)
+    res = client.post("/models/whisper", json={"model": "base"})
+    assert res.status_code == 200
+    assert res.json()["active_model"] == "base"
+    assert res.json()["active_device"] == "cuda"
+
+    res_cancel_w = client.post("/models/whisper/cancel")
+    assert res_cancel_w.status_code == 200
+    assert res_cancel_w.json()["ok"] is True
+
+    res_cancel_l = client.post("/models/prepare/cancel")
+    assert res_cancel_l.status_code == 200
+    assert res_cancel_l.json()["ok"] is True
+
+
+def test_download_cancellation_cleans_temp_file(tmp_path):
+    import threading
+    import httpx
+    from app.downloader import DownloadCancelled, stream_download_file
+
+    cancel_ev = threading.Event()
+    cancel_ev.set()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"x" * 1024, headers={"content-length": "1024"})
+
+    transport = httpx.MockTransport(handler)
+    dest = tmp_path / "model.bin"
+    with httpx.Client(transport=transport) as client:
+        try:
+            stream_download_file(client, "https://example.com/model.bin", dest, cancel_event=cancel_ev)
+            assert False, "Expected DownloadCancelled"
+        except DownloadCancelled:
+            pass
+
+    assert not dest.exists()
+    assert not (tmp_path / "model.bin.tmp").exists()
+
+
+def test_whisper_model_selection_persists(tmp_path, monkeypatch):
+    from app.config import settings
+    from app.stt import FasterWhisperSTT
+
+    monkeypatch.setattr(settings, "models_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "whisper_model", "small")
+
+    stt_1 = FasterWhisperSTT()
+    assert stt_1.active_model_name == "small"
+    stt_1._save_active_model_name("base")
+
+    stt_2 = FasterWhisperSTT()
+    assert stt_2.active_model_name == "base"
+
 
 def test_websocket_test_text_roundtrip(monkeypatch):
     def fake_process_text(text, channel, src_lang, dst_lang, tts_enabled=True):

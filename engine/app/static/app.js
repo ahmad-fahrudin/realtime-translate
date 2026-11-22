@@ -4,6 +4,34 @@ let ws = null;
 let isRunning = false;
 let pipWindow = null;
 let engineLabel = "Engine: Ready";
+let activeWhisperModel = "small";
+let activeTranslatorBackend = "nllb";
+
+function populateWhisperModels(data) {
+  const sel = el("whisperModelSelect");
+  if (!sel || !data) return;
+  const models = data.models || [];
+  activeWhisperModel = data.active_model || activeWhisperModel;
+
+  sel.innerHTML = "";
+  for (const m of models) {
+    const tag = m.installed ? "Terpasang" : "Perlu Unduh";
+    sel.add(new Option(`${m.label} [${tag}]`, m.id));
+  }
+  if ([...sel.options].some((o) => o.value === activeWhisperModel)) {
+    sel.value = activeWhisperModel;
+  }
+  syncWhisperApplyBtn();
+}
+
+function syncWhisperApplyBtn() {
+  const sel = el("whisperModelSelect");
+  const btn = el("applyWhisperBtn");
+  if (!sel || !btn) return;
+  const same = sel.value === activeWhisperModel;
+  btn.textContent = same ? "Aktif" : "Pakai Model";
+  btn.disabled = isRunning || same;
+}
 
 function populateLanguages(items) {
   const myLang = el("myLang");
@@ -132,6 +160,8 @@ const LOCKABLE_CONTROL_IDS = [
   "myLang",
   "swapLangBtn",
   "peerLang",
+  "whisperModelSelect",
+  "applyWhisperBtn",
   "prepareBtn",
   "setupVirtualBtn",
   "refreshDevBtn",
@@ -154,6 +184,9 @@ function setControlsLocked(locked) {
   }
   const bypassChip = el("bypassChk")?.closest(".toggle-chip");
   if (bypassChip) bypassChip.classList.toggle("is-disabled", locked);
+  if (!locked) {
+    syncWhisperApplyBtn();
+  }
 }
 
 function setRunningState(running) {
@@ -163,6 +196,27 @@ function setRunningState(running) {
   btn.textContent = running ? "Hentikan Translasi" : "Mulai Translasi";
   btn.className = running ? "danger" : "primary";
   setControlsLocked(running);
+}
+
+function updateDownloadProgressUI(msg) {
+  const isWhisper = msg.kind === "whisper";
+  const wrap = el(isWhisper ? "whisperProgressWrap" : "langProgressWrap");
+  const bar = el(isWhisper ? "whisperProgressBar" : "langProgressBar");
+  const text = el(isWhisper ? "whisperProgressText" : "langProgressText");
+  const cancelBtn = el(isWhisper ? "cancelWhisperBtn" : "cancelLangBtn");
+  if (!wrap || !bar || !text) return;
+
+  if (msg.status === "downloading") {
+    wrap.hidden = false;
+    const pct = Math.max(0, Math.min(100, Number(msg.percent) || 0));
+    bar.style.width = `${pct}%`;
+    text.textContent = `${pct}% · ${msg.message || "Mengunduh..."}`;
+    if (cancelBtn) cancelBtn.disabled = false;
+  } else {
+    wrap.hidden = true;
+    bar.style.width = "0%";
+    text.textContent = "0%";
+  }
 }
 
 function connectControlWs() {
@@ -192,6 +246,15 @@ function connectControlWs() {
       dot.className = msg.active ? "dot active" : "dot";
     } else if (msg.event === "translation") {
       appendFeed(msg);
+    } else if (msg.event === "download_progress") {
+      updateDownloadProgressUI(msg);
+    } else if (msg.event === "whisper_model") {
+      activeWhisperModel = msg.active_model || activeWhisperModel;
+      const dev = msg.active_device || "cuda";
+      const mt = msg.translator_backend || activeTranslatorBackend;
+      engineLabel = `Ready · ${activeWhisperModel} (${dev}) · ${mt}`;
+      el("engineStatus").textContent = engineLabel;
+      fetch("/models/whisper").then((r) => r.json()).then(populateWhisperModels).catch(() => {});
     } else if (msg.event === "error") {
       el("hintMsg").textContent = msg.message;
       if (!isRunning) {
@@ -229,23 +292,82 @@ async function openPipOverlay() {
 }
 
 async function init() {
-  const [langRes, devRes, healthRes] = await Promise.all([
+  const [langRes, devRes, healthRes, whisperRes] = await Promise.all([
     fetch("/languages").then((r) => r.json()),
     fetch("/audio/devices").then((r) => r.json()),
     fetch("/health").then((r) => r.json()).catch(() => null),
+    fetch("/models/whisper").then((r) => r.json()).catch(() => null),
   ]);
   if (healthRes && healthRes.whisper_model) {
+    activeWhisperModel = healthRes.whisper_model;
+    activeTranslatorBackend = healthRes.translator_backend || "nllb";
     const dev = healthRes.whisper_device || "cpu";
-    const mt = healthRes.translator_backend || "nllb";
-    engineLabel = `Ready · ${healthRes.whisper_model} (${dev}) · ${mt}`;
+    engineLabel = `Ready · ${activeWhisperModel} (${dev}) · ${activeTranslatorBackend}`;
     if (ws && ws.readyState === WebSocket.OPEN) {
       el("engineStatus").textContent = engineLabel;
     }
   }
   populateLanguages(langRes.languages || []);
+  populateWhisperModels(whisperRes);
   applyDevices(devRes);
   connectControlWs();
 }
+
+el("whisperModelSelect").addEventListener("change", syncWhisperApplyBtn);
+
+el("applyWhisperBtn").addEventListener("click", async () => {
+  const sel = el("whisperModelSelect");
+  const btn = el("applyWhisperBtn");
+  const startBtn = el("startBtn");
+  const targetModel = sel.value;
+  if (!targetModel || targetModel === activeWhisperModel) return;
+
+  sel.disabled = true;
+  btn.disabled = true;
+  btn.textContent = "Memuat...";
+  startBtn.disabled = true;
+  el("cancelWhisperBtn").disabled = false;
+  el("whisperProgressWrap").hidden = false;
+  el("whisperProgressBar").style.width = "0%";
+  el("whisperProgressText").textContent = `0% · Menyiapkan model ${targetModel}...`;
+  el("hintMsg").textContent = `Memuat model Whisper (${targetModel})...`;
+  try {
+    const resp = await fetch("/models/whisper", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: targetModel }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      throw new Error(data.detail || "Gagal mengganti model Whisper");
+    }
+    if (data.cancelled) {
+      el("whisperModelSelect").value = activeWhisperModel;
+      el("hintMsg").textContent = "Unduhan model Whisper dibatalkan.";
+      return;
+    }
+    const whisperRes = await fetch("/models/whisper").then((r) => r.json());
+    populateWhisperModels(whisperRes);
+    const dev = data.active_device || "cpu";
+    engineLabel = `Ready · ${data.active_model} (${dev}) · ${activeTranslatorBackend}`;
+    el("engineStatus").textContent = engineLabel;
+    el("hintMsg").textContent = `Model Whisper aktif: ${data.active_model} (${dev}).`;
+  } catch (err) {
+    el("hintMsg").textContent = `Gagal ganti model: ${err.message}`;
+    el("whisperModelSelect").value = activeWhisperModel;
+  } finally {
+    el("whisperProgressWrap").hidden = true;
+    sel.disabled = isRunning;
+    startBtn.disabled = false;
+    syncWhisperApplyBtn();
+  }
+});
+
+el("cancelWhisperBtn").addEventListener("click", async () => {
+  el("cancelWhisperBtn").disabled = true;
+  el("whisperProgressText").textContent = "Membatalkan unduhan...";
+  await fetch("/models/whisper/cancel", { method: "POST" }).catch(() => {});
+});
 
 el("refreshDevBtn").addEventListener("click", async () => {
   const devRes = await fetch("/audio/devices").then((r) => r.json());
@@ -271,22 +393,42 @@ el("swapLangBtn").addEventListener("click", () => {
 });
 
 el("prepareBtn").addEventListener("click", async () => {
+  const btn = el("prepareBtn");
+  btn.disabled = true;
+  el("cancelLangBtn").disabled = false;
+  el("langProgressWrap").hidden = false;
+  el("langProgressBar").style.width = "0%";
+  el("langProgressText").textContent = "0% · Menyiapkan paket bahasa...";
   el("hintMsg").textContent = "Mengunduh paket bahasa...";
   try {
-    await fetch("/models/prepare", {
+    const resp = await fetch("/models/prepare", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ src_lang: el("myLang").value, dst_lang: el("peerLang").value }),
+      body: JSON.stringify({
+        src_lang: el("myLang").value,
+        dst_lang: el("peerLang").value,
+        bidirectional: true,
+      }),
     });
-    await fetch("/models/prepare", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ src_lang: el("peerLang").value, dst_lang: el("myLang").value }),
-    });
-    el("hintMsg").textContent = "Paket bahasa siap.";
+    const data = await resp.json();
+    if (!resp.ok) {
+      throw new Error(data.detail || "Gagal mengunduh paket bahasa");
+    }
+    el("hintMsg").textContent = data.cancelled
+      ? "Unduhan paket bahasa dibatalkan."
+      : "Paket bahasa siap.";
   } catch (err) {
     el("hintMsg").textContent = `Gagal unduh: ${err.message}`;
+  } finally {
+    el("langProgressWrap").hidden = true;
+    btn.disabled = isRunning;
   }
+});
+
+el("cancelLangBtn").addEventListener("click", async () => {
+  el("cancelLangBtn").disabled = true;
+  el("langProgressText").textContent = "Membatalkan unduhan...";
+  await fetch("/models/prepare/cancel", { method: "POST" }).catch(() => {});
 });
 
 el("startBtn").addEventListener("click", () => {

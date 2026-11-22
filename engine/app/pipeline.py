@@ -1,8 +1,11 @@
 from dataclasses import dataclass
+import threading
 import time
+from typing import Callable
 import uuid
 import numpy as np
 
+from .downloader import DownloadCancelled
 from .stt import FasterWhisperSTT
 from .text_norm import normalize_spoken_text
 from .translator import HybridTranslator
@@ -42,15 +45,63 @@ class TranslationEngine:
         self.tts.ensure_voice("id")
         self.tts.ensure_voice("en")
 
-    def prepare_pair(self, src_lang: str, dst_lang: str) -> dict[str, object]:
+    def prepare_pair(
+        self,
+        src_lang: str,
+        dst_lang: str,
+        bidirectional: bool = False,
+        cancel_event: threading.Event | None = None,
+        on_progress: Callable[[int, int, str], None] | None = None,
+    ) -> dict[str, object]:
         self.stt.load()
-        translation_ok = True
-        if src_lang != "auto" and dst_lang != "auto" and src_lang != dst_lang:
-            translation_ok = self.translator.ensure_language_pair(src_lang, dst_lang)
+        if cancel_event is not None and cancel_event.is_set():
+            raise DownloadCancelled("Unduhan dibatalkan oleh pengguna.")
 
-        tts_ok = False
-        if dst_lang != "auto" and self.tts.has_catalog_voice(dst_lang):
-            tts_ok = self.tts.ensure_voice(dst_lang) is not None
+        pairs = [(src_lang, dst_lang)]
+        if bidirectional and src_lang != dst_lang:
+            pairs.append((dst_lang, src_lang))
+
+        translation_ok = True
+        for s_lang, d_lang in pairs:
+            if cancel_event is not None and cancel_event.is_set():
+                raise DownloadCancelled("Unduhan dibatalkan oleh pengguna.")
+            if s_lang != "auto" and d_lang != "auto" and s_lang != d_lang:
+                if not self.translator.ensure_language_pair(s_lang, d_lang):
+                    translation_ok = False
+
+        voice_langs = [dst_lang] if not bidirectional else [src_lang, dst_lang]
+        unique_voices: list[str] = []
+        for lang in voice_langs:
+            if lang != "auto" and lang not in unique_voices and self.tts.has_catalog_voice(lang):
+                unique_voices.append(lang)
+
+        tts_ok = True if unique_voices else False
+        total_voices = len(unique_voices)
+        for idx, lang in enumerate(unique_voices):
+            if cancel_event is not None and cancel_event.is_set():
+                raise DownloadCancelled("Unduhan dibatalkan oleh pengguna.")
+
+            def _voice_progress(
+                dl: int, tot: int, label: str, voice_idx: int = idx
+            ) -> None:
+                if on_progress is None:
+                    return
+                if tot > 0:
+                    # Map multi-voice progress cleanly into a unified 0..10000 scale when multiple voices download
+                    voice_frac = min(1.0, dl / tot)
+                    overall_pct = int(((voice_idx + voice_frac) / max(1, total_voices)) * 100)
+                    on_progress(dl, tot, f"{label}|{overall_pct}")
+
+            ok = (
+                self.tts.ensure_voice(
+                    lang,
+                    cancel_event=cancel_event,
+                    on_progress=_voice_progress if not self.tts.is_voice_installed(lang) else None,
+                )
+                is not None
+            )
+            if not ok:
+                tts_ok = False
 
         return {
             "src_lang": src_lang,

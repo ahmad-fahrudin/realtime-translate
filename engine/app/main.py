@@ -3,14 +3,17 @@ from contextlib import asynccontextmanager
 import json
 import logging
 from pathlib import Path
+import threading
+import time
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .config import PIPER_VOICE_CATALOG, SUPPORTED_LANGUAGES, settings
+from .config import PIPER_VOICE_CATALOG, SUPPORTED_LANGUAGES, WHISPER_MODEL_CATALOG, settings
+from .downloader import DownloadCancelled, format_mb
 from .pipeline import TranslationEngine, TranslationOutput
 from .pulse_audio import PulseCallBridge, list_pulse_devices, setup_virtual_audio
 from .vad import StreamingVAD
@@ -37,6 +40,56 @@ async def broadcast_control(payload: dict[str, Any]) -> None:
 
 
 bridge = PulseCallBridge(engine=engine, on_event=broadcast_control)
+download_cancels: dict[str, threading.Event] = {}
+download_lock = asyncio.Lock()
+
+
+def _make_progress_callback(kind: str, target: str, loop: asyncio.AbstractEventLoop):
+    last_emit = {"t": 0.0, "pct": -1}
+
+    def _emit(payload: dict[str, Any]) -> None:
+        if not loop.is_closed():
+            asyncio.run_coroutine_threadsafe(broadcast_control(payload), loop)
+
+    def _on_progress(downloaded: int, total: int, label: str) -> None:
+        # Support optional "|<overall_pct>" override for multi-file language packages
+        override_pct: int | None = None
+        clean_label = label
+        if "|" in label:
+            clean_label, raw_pct = label.rsplit("|", 1)
+            if raw_pct.isdigit():
+                override_pct = int(raw_pct)
+
+        if override_pct is not None:
+            pct = max(0, min(100, override_pct))
+        elif total > 0:
+            pct = max(0, min(100, int((downloaded / total) * 100)))
+        else:
+            pct = 0
+
+        now = time.monotonic()
+        if pct != last_emit["pct"] and (now - last_emit["t"] >= 0.15 or pct >= 100):
+            last_emit["t"] = now
+            last_emit["pct"] = pct
+            size_info = (
+                f"{format_mb(downloaded)} / {format_mb(total)}"
+                if total > 0
+                else format_mb(downloaded)
+            )
+            _emit(
+                {
+                    "event": "download_progress",
+                    "kind": kind,
+                    "target": target,
+                    "status": "downloading",
+                    "percent": pct,
+                    "downloaded_bytes": downloaded,
+                    "total_bytes": total,
+                    "message": f"Mengunduh {clean_label} ({size_info})",
+                }
+            )
+
+    return _on_progress
 
 
 @asynccontextmanager
@@ -59,6 +112,11 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 class PrepareRequest(BaseModel):
     src_lang: str
     dst_lang: str
+    bidirectional: bool = False
+
+
+class WhisperModelRequest(BaseModel):
+    model: str
 
 
 @app.get("/")
@@ -70,14 +128,134 @@ async def index() -> FileResponse:
 async def health() -> dict[str, object]:
     return {
         "status": "ok",
-        "whisper_model": settings.whisper_model,
+        "whisper_model": engine.stt.active_model_name,
         "whisper_device": engine.stt.active_device,
+        "installed_whisper_models": engine.stt.installed_models(),
         "translator_backend": engine.translator.active_backend,
         "translator_device": engine.translator.active_device,
         "bridge_running": bridge.running,
         "installed_translation_pairs": engine.translator.installed_pairs(),
         "installed_tts_languages": engine.tts.installed_languages(),
     }
+
+
+@app.get("/models/whisper")
+async def get_whisper_models() -> dict[str, object]:
+    installed = set(engine.stt.installed_models())
+    return {
+        "active_model": engine.stt.active_model_name,
+        "active_device": engine.stt.active_device,
+        "models": [
+            {
+                "id": item["id"],
+                "label": item["label"],
+                "installed": item["id"] in installed,
+            }
+            for item in WHISPER_MODEL_CATALOG
+        ],
+    }
+
+
+@app.post("/models/whisper")
+async def switch_whisper_model(req: WhisperModelRequest) -> dict[str, object]:
+    if bridge.running:
+        raise HTTPException(
+            status_code=409,
+            detail="Hentikan translasi terlebih dahulu sebelum mengganti model Whisper.",
+        )
+    if "whisper" in download_cancels:
+        raise HTTPException(
+            status_code=409,
+            detail="Unduhan model Whisper sedang berlangsung.",
+        )
+
+    loop = asyncio.get_running_loop()
+    cancel_ev = threading.Event()
+    download_cancels["whisper"] = cancel_ev
+    on_progress = _make_progress_callback("whisper", req.model, loop)
+
+    await broadcast_control(
+        {
+            "event": "download_progress",
+            "kind": "whisper",
+            "target": req.model,
+            "status": "downloading",
+            "percent": 0,
+            "message": f"Menyiapkan model {req.model}...",
+        }
+    )
+
+    try:
+        res = await asyncio.to_thread(
+            engine.stt.switch_model, req.model, cancel_ev, on_progress
+        )
+    except DownloadCancelled:
+        await broadcast_control(
+            {
+                "event": "download_progress",
+                "kind": "whisper",
+                "target": req.model,
+                "status": "cancelled",
+                "percent": 0,
+                "message": "Unduhan model dibatalkan.",
+            }
+        )
+        return {"cancelled": True, "active_model": engine.stt.active_model_name}
+    except ValueError as exc:
+        await broadcast_control(
+            {
+                "event": "download_progress",
+                "kind": "whisper",
+                "target": req.model,
+                "status": "error",
+                "percent": 0,
+                "message": str(exc),
+            }
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        await broadcast_control(
+            {
+                "event": "download_progress",
+                "kind": "whisper",
+                "target": req.model,
+                "status": "error",
+                "percent": 0,
+                "message": str(exc),
+            }
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        download_cancels.pop("whisper", None)
+
+    await broadcast_control(
+        {
+            "event": "download_progress",
+            "kind": "whisper",
+            "target": req.model,
+            "status": "done",
+            "percent": 100,
+            "message": f"Model {res['active_model']} siap.",
+        }
+    )
+    await broadcast_control(
+        {
+            "event": "whisper_model",
+            "active_model": res["active_model"],
+            "active_device": res["active_device"],
+            "translator_backend": engine.translator.active_backend,
+        }
+    )
+    return res
+
+
+@app.post("/models/whisper/cancel")
+async def cancel_whisper_download() -> dict[str, object]:
+    ev = download_cancels.get("whisper")
+    if ev is not None:
+        ev.set()
+        return {"ok": True, "cancelling": True}
+    return {"ok": True, "cancelling": False}
 
 
 @app.get("/languages")
@@ -102,7 +280,89 @@ async def languages() -> dict[str, object]:
 
 @app.post("/models/prepare")
 async def prepare_models(req: PrepareRequest) -> dict[str, object]:
-    return await asyncio.to_thread(engine.prepare_pair, req.src_lang, req.dst_lang)
+    if "language" in download_cancels:
+        raise HTTPException(
+            status_code=409,
+            detail="Unduhan paket bahasa sedang berlangsung.",
+        )
+
+    target = (
+        f"{req.src_lang}<->{req.dst_lang}"
+        if req.bidirectional
+        else f"{req.src_lang}->{req.dst_lang}"
+    )
+    loop = asyncio.get_running_loop()
+    cancel_ev = threading.Event()
+    download_cancels["language"] = cancel_ev
+    on_progress = _make_progress_callback("language", target, loop)
+
+    await broadcast_control(
+        {
+            "event": "download_progress",
+            "kind": "language",
+            "target": target,
+            "status": "downloading",
+            "percent": 0,
+            "message": f"Menyiapkan paket bahasa ({target})...",
+        }
+    )
+
+    try:
+        res = await asyncio.to_thread(
+            engine.prepare_pair,
+            req.src_lang,
+            req.dst_lang,
+            req.bidirectional,
+            cancel_ev,
+            on_progress,
+        )
+    except DownloadCancelled:
+        await broadcast_control(
+            {
+                "event": "download_progress",
+                "kind": "language",
+                "target": target,
+                "status": "cancelled",
+                "percent": 0,
+                "message": "Unduhan paket bahasa dibatalkan.",
+            }
+        )
+        return {"cancelled": True}
+    except Exception as exc:
+        await broadcast_control(
+            {
+                "event": "download_progress",
+                "kind": "language",
+                "target": target,
+                "status": "error",
+                "percent": 0,
+                "message": str(exc),
+            }
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        download_cancels.pop("language", None)
+
+    await broadcast_control(
+        {
+            "event": "download_progress",
+            "kind": "language",
+            "target": target,
+            "status": "done",
+            "percent": 100,
+            "message": "Paket bahasa siap.",
+        }
+    )
+    return res
+
+
+@app.post("/models/prepare/cancel")
+async def cancel_language_download() -> dict[str, object]:
+    ev = download_cancels.get("language")
+    if ev is not None:
+        ev.set()
+        return {"ok": True, "cancelling": True}
+    return {"ok": True, "cancelling": False}
 
 
 @app.get("/audio/devices")
