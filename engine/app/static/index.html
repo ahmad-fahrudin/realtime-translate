@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Realtime Translate</title>
+    <script>
+      (function () {
+        var t = localStorage.getItem("theme");
+        if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+      })();
+    </script>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
@@ -22,6 +28,11 @@
           <div class="status-pill">
             <span id="peerVadDot" class="dot"></span>
             <span>Peer</span>
+          </div>
+          <div class="theme-switch" role="radiogroup" aria-label="Tema">
+            <button type="button" role="radio" data-theme-opt="system">Sistem</button>
+            <button type="button" role="radio" data-theme-opt="light">Terang</button>
+            <button type="button" role="radio" data-theme-opt="dark">Gelap</button>
           </div>
         </div>
       </header>
@@ -227,10 +238,7 @@
         <section class="transcript-panel" aria-label="Transkrip Langsung dan Testing">
           <div class="panel-head">
             <span class="section-title">Transkrip Langsung</span>
-            <div class="controls-group">
-              <span id="hintMsg" class="status-pill hint-pill"></span>
-              <button id="pipBtn" type="button">Pop-out Subtitle</button>
-            </div>
+            <span id="hintMsg" class="status-pill hint-pill"></span>
           </div>
 
           <div id="feed" class="transcript-feed"></div>

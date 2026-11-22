@@ -14,14 +14,14 @@ Sistem penerjemah suara dua arah secara *real-time* untuk panggilan **WhatsApp W
 [WA / Zoom Spk: RT_Virtual_Speaker] ──(parec)──► [Mixer + VAD -> Whisper -> Argos -> Piper]
                                                          │
 [Headphone Fisik] ◄────────────(pacat + Ducking)─────────┘
-[Browser UI + Pop-out Subtitle] ◄───(http://localhost:8765)───┘
+[Browser UI] ◄────────────────(http://localhost:8765)────┘
 ```
 
 - **Speech-to-Text (STT)**: `faster-whisper` (`small` `int8`, auto-deteksi GPU CUDA dengan fallback CPU)
 - **Machine Translation**: `argostranslate` (offline neural MT, mendukung pivot 2-hop via English)
 - **Text-to-Speech (TTS)**: `piper-tts` (ONNX; tersedia untuk `id`, `en`, `es`, `fr`, `de`, `zh`, `ar`; untuk `ja` dan `ko` berjalan *subtitle-only*)
 - **Audio Routing & Ducking**: `pactl` / `parec` / `pacat` terhubung ke PipeWire/PulseAudio host lewat `/run/user/$UID/pulse`
-- **Frontend**: Web UI di `http://localhost:8765` + **Pop-out Subtitle** (*Picture-in-Picture Always-on-Top*)
+- **Frontend**: Web UI di `http://localhost:8765`
 
 ---
 
@@ -41,7 +41,7 @@ curl -s http://localhost:8765/health
 ```
 
 ### 2. Buka Web UI & Siapkan Audio Virtual
-1. Buka **`http://localhost:8765`** di browser (Chrome/Chromium/Edge direkomendasikan untuk fitur *Always-on-Top Picture-in-Picture*).
+1. Buka **`http://localhost:8765`** di browser.
 2. Klik **`Setup Virtual Audio`** di UI (atau jalankan `./scripts/linux_virtual_audio.sh up` di terminal host) untuk membuat:
    - **`RT_Virtual_Mic`** (sumber mic virtual untuk dipilih di WA/Zoom/Meet)
    - **`RT_Virtual_Speaker`** (speaker virtual untuk dipilih di WA/Zoom/Meet)
@@ -94,7 +94,6 @@ Masuk ke pengaturan audio aplikasi panggilan Anda:
   - **`Push-to-Talk`**: Memunculkan tombol **`Tahan untuk Bicara`**. Suara Anda hanya direkam selama tombol ditahan dan langsung diterjemahkan saat dilepas (cocok untuk lingkungan bising).
 - **`Bypass Mic`**: Meneruskan suara mic fisik Anda langsung ke `RT_Virtual_Mic_Sink` **tanpa diterjemahkan** (untuk bicara normal sementara).
 - **`Ducking` (default `18%`)**: Mengatur seberapa kecil volume suara asli lawan bicara saat suara TTS terjemahan sedang berbicara di headphone Anda (`0%` = suara asli dibisukan saat TTS bunyi, `100%` = tidak dikecilkan).
-- **`Pop-out Subtitle`**: Membuka jendela kecil mengambang yang menampilkan 3 subtitle terjemahan terakhir di atas jendela aplikasi lain.
 
 ### Panel Transkrip Langsung & Uji Coba
 - **Feed Transkrip**: Menampilkan riwayat percakapan (`Anda` / `Lawan Bicara`), teks asli (baris atas), hasil terjemahan (baris bawah), dan latensi (`ms`).

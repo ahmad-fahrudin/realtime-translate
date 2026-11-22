@@ -2,7 +2,6 @@ const el = (id) => document.getElementById(id);
 
 let ws = null;
 let isRunning = false;
-let pipWindow = null;
 let engineLabel = "Engine: Ready";
 let activeWhisperModel = "small";
 let activeTranslatorBackend = "nllb";
@@ -190,44 +189,32 @@ function getConfig() {
 
 function appendFeed(item) {
   const feed = el("feed");
-  const div = document.createElement("div");
-  div.className = "feed-item";
-  const tag = item.channel === "outgoing" ? "Anda" : "Lawan Bicara";
+  const out = item.channel === "outgoing";
+  const nearBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+  const div = document.createElement("article");
+  div.className = `msg ${out ? "msg-out" : "msg-in"}`;
+  const tag = out ? "Anda" : "Lawan Bicara";
   const warn = item.tts_warning ? ` · ${item.tts_warning}` : "";
   const hasStages = typeof item.mt_ms === "number";
   const timing = hasStages
-    ? `${item.latency_ms} ms (STT ${item.stt_ms || 0} · MT ${item.mt_ms} · TTS ${item.tts_ms || 0})`
+    ? `${item.latency_ms} ms · STT ${item.stt_ms || 0} · MT ${item.mt_ms} · TTS ${item.tts_ms || 0}`
     : `${item.latency_ms} ms`;
+  const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   div.innerHTML = `
-    <div class="feed-meta">
-      <span>${tag} (${item.src_lang} → ${item.dst_lang})</span>
-      <span>${timing}${warn}</span>
+    <div class="msg-meta"><span class="msg-who"></span><span class="msg-time"></span></div>
+    <div class="bubble">
+      <div class="feed-dst"></div>
+      <div class="feed-src"></div>
     </div>
-    <div class="feed-src"></div>
-    <div class="feed-dst"></div>
+    <div class="msg-foot"></div>
   `;
+  div.querySelector(".msg-who").textContent = `${tag} · ${item.src_lang} → ${item.dst_lang}`;
+  div.querySelector(".msg-time").textContent = time;
   div.querySelector(".feed-src").textContent = item.source_text;
   div.querySelector(".feed-dst").textContent = item.translated_text;
+  div.querySelector(".msg-foot").textContent = `${timing}${warn}`;
   feed.appendChild(div);
-  feed.scrollTop = feed.scrollHeight;
-
-  if (pipWindow && !pipWindow.closed) {
-    const lines = pipWindow.document.getElementById("pipLines");
-    if (lines) {
-      const line = pipWindow.document.createElement("div");
-      line.style.cssText = "display:flex;flex-direction:column;gap:2px;";
-      const tagEl = pipWindow.document.createElement("span");
-      tagEl.style.cssText = `font-size:11px;font-weight:600;color:${item.channel === "incoming" ? "#22c55e" : "#3b82f6"}`;
-      tagEl.textContent = `${tag} (${item.dst_lang.toUpperCase()})`;
-      const txtEl = pipWindow.document.createElement("span");
-      txtEl.style.cssText = "font-size:15px;font-weight:500;color:#fff;";
-      txtEl.textContent = item.translated_text;
-      line.appendChild(tagEl);
-      line.appendChild(txtEl);
-      lines.appendChild(line);
-      while (lines.children.length > 3) lines.removeChild(lines.firstChild);
-    }
-  }
+  if (nearBottom || out) feed.scrollTop = feed.scrollHeight;
 }
 
 function sendWs(payload) {
@@ -352,33 +339,6 @@ function connectControlWs() {
       }
     }
   };
-}
-
-async function openPipOverlay() {
-  if (pipWindow && !pipWindow.closed) {
-    pipWindow.close();
-    pipWindow = null;
-    return;
-  }
-
-  let win = null;
-  if ("documentPictureInPicture" in window) {
-    win = await window.documentPictureInPicture.requestWindow({ width: 620, height: 180 });
-  } else {
-    win = window.open("", "rt_subtitle_pip", "width=620,height=180,alwaysRaised=yes");
-  }
-  if (!win) return;
-
-  pipWindow = win;
-  win.document.title = "Live Subtitle";
-  win.document.body.style.cssText =
-    "margin:0;padding:12px 14px;background:#0c0d10;color:#fff;font-family:-apple-system,BlinkMacSystemFont,Inter,sans-serif;display:flex;flex-direction:column;gap:8px;";
-  win.document.body.innerHTML = `
-    <div style="font-size:11px;color:#9ca3af;display:flex;justify-content:space-between;">
-      <span>Live Subtitle</span><span>Always on top</span>
-    </div>
-    <div id="pipLines" style="display:flex;flex-direction:column;gap:8px;"></div>
-  `;
 }
 
 function syncTtsLabels() {
@@ -703,7 +663,6 @@ el("swapLangBtn").addEventListener("click", () => {
   if (isRunning) sendWs({ cmd: "update_config", config: getConfig() });
 });
 
-el("pipBtn").addEventListener("click", openPipOverlay);
 el("testOutBtn").addEventListener("click", () => {
   const text = el("testInput").value.trim();
   if (text) sendWs({ cmd: "test_text", channel: "outgoing", text, config: getConfig() });
@@ -734,3 +693,25 @@ function initSettingsTabs() {
 initSettingsTabs();
 init();
 
+
+
+(function initTheme() {
+  const root = document.documentElement;
+  const btns = document.querySelectorAll("[data-theme-opt]");
+  const apply = (mode) => {
+    if (mode === "light" || mode === "dark") {
+      root.dataset.theme = mode;
+      localStorage.setItem("theme", mode);
+    } else {
+      delete root.dataset.theme;
+      localStorage.removeItem("theme");
+    }
+    btns.forEach((b) => {
+      const on = b.dataset.themeOpt === (mode === "light" || mode === "dark" ? mode : "system");
+      b.classList.toggle("is-active", on);
+      b.setAttribute("aria-checked", on ? "true" : "false");
+    });
+  };
+  btns.forEach((b) => b.addEventListener("click", () => apply(b.dataset.themeOpt)));
+  apply(localStorage.getItem("theme"));
+})();
