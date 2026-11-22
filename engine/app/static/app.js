@@ -21,7 +21,7 @@ function populateLanguages(items) {
   peerLang.value = prevPeer;
 }
 
-function populateDeviceSelect(selectEl, devices, preferredMatchers = [], excludeMatchers = []) {
+function populateDeviceSelect(selectEl, devices, preferredMatchers = []) {
   const prev = selectEl.value;
   selectEl.innerHTML = "";
   selectEl.add(new Option("-- Tidak dipilih --", ""));
@@ -29,8 +29,7 @@ function populateDeviceSelect(selectEl, devices, preferredMatchers = [], exclude
 
   for (const d of devices) {
     selectEl.add(new Option(d.name, d.id));
-    const excluded = excludeMatchers.some((rx) => rx.test(d.id) || rx.test(d.name));
-    if (!excluded && !autoPick && preferredMatchers.some((rx) => rx.test(d.id) || rx.test(d.name))) {
+    if (!autoPick && preferredMatchers.some((rx) => rx.test(d.id) || rx.test(d.name))) {
       autoPick = d.id;
     }
   }
@@ -38,24 +37,32 @@ function populateDeviceSelect(selectEl, devices, preferredMatchers = [], exclude
     selectEl.value = prev;
   } else if (autoPick) {
     selectEl.value = autoPick;
+  } else if (devices.length === 1) {
+    selectEl.value = devices[0].id;
   }
 }
 
 function applyDevices(devices) {
-  populateDeviceSelect(
-    el("micSelect"),
-    devices.inputs || [],
-    [/alsa_input\./i, /mic|headset/i],
-    [/\.monitor$/i, /RT_Virtual_/i]
+  const inputs = devices.inputs || [];
+  const outputs = devices.outputs || [];
+
+  const physicalMics = inputs.filter(
+    (d) => !/\.monitor$/i.test(d.id) && !/^RT_Virtual_/i.test(d.id) && !/^Monitor of /i.test(d.name)
   );
-  populateDeviceSelect(el("vmicSelect"), devices.outputs || [], [/^RT_Virtual_Mic_Sink$/i]);
-  populateDeviceSelect(el("vspkSelect"), devices.inputs || [], [/^RT_Virtual_Speaker_Sink\.monitor$/i]);
-  populateDeviceSelect(
-    el("hpSelect"),
-    devices.outputs || [],
-    [/alsa_output\./i, /analog|headphone|speaker/i],
-    [/RT_Virtual_/i]
+  const virtualMicSinks = outputs.filter(
+    (d) => /^RT_Virtual_Mic/i.test(d.id) || /RT_Virtual_Mic/i.test(d.name)
   );
+  const virtualSpeakerMonitors = inputs.filter(
+    (d) => /^RT_Virtual_Speaker.*\.monitor$/i.test(d.id) || /Monitor of RT_Virtual_Speaker/i.test(d.name)
+  );
+  const physicalOutputs = outputs.filter(
+    (d) => !/^RT_Virtual_/i.test(d.id) && !/RT_Virtual_/i.test(d.name)
+  );
+
+  populateDeviceSelect(el("micSelect"), physicalMics, [/bluez_input\./i, /alsa_input\./i, /mic|headset/i]);
+  populateDeviceSelect(el("vmicSelect"), virtualMicSinks, [/^RT_Virtual_Mic_Sink$/i]);
+  populateDeviceSelect(el("vspkSelect"), virtualSpeakerMonitors, [/^RT_Virtual_Speaker_Sink\.monitor$/i]);
+  populateDeviceSelect(el("hpSelect"), physicalOutputs, [/bluez_output\./i, /alsa_output\./i, /analog|headphone|speaker/i]);
 }
 
 function getConfig() {
@@ -116,12 +123,41 @@ function sendWs(payload) {
   }
 }
 
+const LOCKABLE_CONTROL_IDS = [
+  "myLang",
+  "swapLangBtn",
+  "peerLang",
+  "prepareBtn",
+  "setupVirtualBtn",
+  "refreshDevBtn",
+  "micSelect",
+  "vmicSelect",
+  "vspkSelect",
+  "hpSelect",
+  "modeSelect",
+  "bypassChk",
+  "duckSlider",
+  "testInput",
+  "testOutBtn",
+  "testInBtn",
+];
+
+function setControlsLocked(locked) {
+  for (const id of LOCKABLE_CONTROL_IDS) {
+    const node = el(id);
+    if (node) node.disabled = locked;
+  }
+  const bypassChip = el("bypassChk")?.closest(".toggle-chip");
+  if (bypassChip) bypassChip.classList.toggle("is-disabled", locked);
+}
+
 function setRunningState(running) {
   isRunning = running;
   const btn = el("startBtn");
   btn.disabled = false;
   btn.textContent = running ? "Hentikan Translasi" : "Mulai Translasi";
   btn.className = running ? "danger" : "primary";
+  setControlsLocked(running);
 }
 
 function connectControlWs() {
@@ -252,6 +288,7 @@ el("startBtn").addEventListener("click", () => {
     }
     btn.disabled = true;
     btn.textContent = "Menyiapkan...";
+    setControlsLocked(true);
     el("hintMsg").textContent = "";
     sendWs({ cmd: "start", config: cfg });
   }

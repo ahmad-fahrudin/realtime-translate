@@ -163,8 +163,20 @@ button {
   transition: background 0.12s ease;
 }
 
-button:hover {
+button:hover:not(:disabled) {
   background: var(--surface-hover);
+}
+
+select:disabled,
+input:disabled,
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.toggle-chip.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 button.primary {
