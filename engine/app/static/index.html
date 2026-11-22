@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Realtime Translate</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <main class="app">
@@ -13,7 +13,7 @@
         <div class="status-row">
           <div class="status-pill">
             <span id="engineDot" class="dot"></span>
-            <span id="engineStatus">Engine: Offline</span>
+            <span id="engineStatus">Connecting...</span>
           </div>
           <div class="status-pill">
             <span id="micVadDot" class="dot"></span>
@@ -46,9 +46,9 @@
 
       <section class="section">
         <div class="section-head">
-          <span class="section-title">Routing Audio</span>
+          <span class="section-title">Routing Audio (PipeWire / PulseAudio)</span>
           <div class="controls-group">
-            <button id="linuxVirtualBtn" type="button">Setup Virtual Audio (Linux)</button>
+            <button id="setupVirtualBtn" type="button">Setup Virtual Audio</button>
             <button id="refreshDevBtn" type="button">Refresh</button>
           </div>
         </div>
@@ -92,7 +92,7 @@
               <input id="duckSlider" type="range" min="0" max="100" value="18" />
               <span id="duckVal">18%</span>
             </div>
-            <button id="overlayBtn" type="button">Subtitle Overlay</button>
+            <button id="pipBtn" type="button">Pop-out Subtitle</button>
           </div>
         </div>
       </section>
@@ -110,7 +110,7 @@
         </div>
       </section>
     </main>
-    <script src="control.js"></script>
+    <script src="/static/app.js"></script>
   </body>
 </html>
 

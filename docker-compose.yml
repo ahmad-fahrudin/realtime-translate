@@ -1,9 +1,9 @@
 services:
-  engine:
+  app:
     build:
       context: ./engine
       dockerfile: Dockerfile
-    container_name: realtime-translate-engine
+    container_name: realtime-translate
     ports:
       - "8765:8765"
     environment:
@@ -11,10 +11,11 @@ services:
       - RT_WHISPER_COMPUTE_TYPE=int8
       - RT_WHISPER_CPU_THREADS=4
       - RT_PRELOAD_DEFAULT_MODELS=true
+      - PULSE_SERVER=unix:/run/pulse/native
     volumes:
       - rt_models:/models
+      - /run/user/${HOST_UID:-1000}/pulse:/run/pulse
     restart: unless-stopped
 
 volumes:
   rt_models:
-

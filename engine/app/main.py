@@ -2,17 +2,41 @@ import asyncio
 from contextlib import asynccontextmanager
 import json
 import logging
+from pathlib import Path
+from typing import Any
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import PIPER_VOICE_CATALOG, SUPPORTED_LANGUAGES, settings
 from .pipeline import TranslationEngine, TranslationOutput
+from .pulse_audio import PulseCallBridge, list_pulse_devices, setup_virtual_audio
 from .vad import StreamingVAD
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
 logger = logging.getLogger("rt-engine")
 
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
 engine = TranslationEngine()
+control_clients: set[WebSocket] = set()
+control_lock = asyncio.Lock()
+
+
+async def broadcast_control(payload: dict[str, Any]) -> None:
+    text = json.dumps(payload)
+    async with control_lock:
+        clients = list(control_clients)
+    for ws in clients:
+        try:
+            await ws.send_text(text)
+        except Exception:
+            pass
+
+
+bridge = PulseCallBridge(engine=engine, on_event=broadcast_control)
 
 
 @asynccontextmanager
@@ -25,9 +49,11 @@ async def lifespan(_app: FastAPI):
         except Exception as exc:
             logger.warning("Preload warning (models can still load on demand): %s", exc)
     yield
+    await bridge.stop()
 
 
-app = FastAPI(title="Realtime Translate CPU Engine", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Realtime Translate CPU Engine", version="0.2.0", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 class PrepareRequest(BaseModel):
@@ -35,11 +61,17 @@ class PrepareRequest(BaseModel):
     dst_lang: str
 
 
+@app.get("/")
+async def index() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html")
+
+
 @app.get("/health")
 async def health() -> dict[str, object]:
     return {
         "status": "ok",
         "whisper_model": settings.whisper_model,
+        "bridge_running": bridge.running,
         "installed_translation_pairs": engine.translator.installed_pairs(),
         "installed_tts_languages": engine.tts.installed_languages(),
     }
@@ -68,6 +100,50 @@ async def languages() -> dict[str, object]:
 @app.post("/models/prepare")
 async def prepare_models(req: PrepareRequest) -> dict[str, object]:
     return await asyncio.to_thread(engine.prepare_pair, req.src_lang, req.dst_lang)
+
+
+@app.get("/audio/devices")
+async def audio_devices() -> dict[str, object]:
+    try:
+        return await asyncio.to_thread(list_pulse_devices)
+    except Exception as exc:
+        return {"inputs": [], "outputs": [], "error": str(exc)}
+
+
+@app.post("/audio/setup-virtual")
+async def audio_setup_virtual() -> dict[str, object]:
+    return await asyncio.to_thread(setup_virtual_audio)
+
+
+@app.websocket("/ws/control")
+async def ws_control(ws: WebSocket) -> None:
+    await ws.accept()
+    async with control_lock:
+        control_clients.add(ws)
+    await ws.send_text(json.dumps({"event": "status", "running": bridge.running}))
+    try:
+        while True:
+            raw = await ws.receive_text()
+            msg = json.loads(raw)
+            cmd = msg.get("cmd")
+            if cmd == "start":
+                await bridge.start(msg.get("config", {}))
+            elif cmd == "stop":
+                await bridge.stop()
+            elif cmd == "update_config":
+                bridge.update_config(msg.get("config", {}))
+            elif cmd == "ptt":
+                bridge.set_ptt(bool(msg.get("pressed", False)))
+            elif cmd == "test_text":
+                await bridge.test_text(
+                    str(msg.get("channel", "outgoing")),
+                    str(msg.get("text", "")),
+                )
+    except WebSocketDisconnect:
+        pass
+    finally:
+        async with control_lock:
+            control_clients.discard(ws)
 
 
 async def _send_output(ws: WebSocket, out: TranslationOutput) -> None:

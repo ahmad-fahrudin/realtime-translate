@@ -1,8 +1,10 @@
 from pathlib import Path
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="RT_")
+
     host: str = "0.0.0.0"
     port: int = 8765
     models_dir: str = "/models"
@@ -24,9 +26,6 @@ class Settings(BaseSettings):
 
     # Preload default ID <-> EN models on startup if missing
     preload_default_models: bool = True
-
-    class Config:
-        env_prefix = "RT_"
 
 
 settings = Settings()
