@@ -26,162 +26,225 @@
         </div>
       </header>
 
-      <section class="section">
-        <div class="section-head">
-          <span class="section-title">Bahasa</span>
-          <button id="prepareBtn" type="button">Unduh Paket Bahasa</button>
-        </div>
-        <div class="lang-row">
-          <div class="field">
-            <label for="myLang">Bahasa Saya</label>
-            <select id="myLang"></select>
-          </div>
-          <button id="swapLangBtn" class="icon-btn" type="button" title="Tukar bahasa">⇄</button>
-          <div class="field">
-            <label for="peerLang">Bahasa Lawan Bicara</label>
-            <select id="peerLang"></select>
-          </div>
-        </div>
-        <div class="grid-2">
-          <div class="field">
-            <label for="outgoingVoiceSelect">Suara AI Saya (Ke Lawan Bicara)</label>
-            <select id="outgoingVoiceSelect"></select>
-          </div>
-          <div class="field">
-            <label for="incomingVoiceSelect">Suara AI Lawan Bicara (Ke Headphone)</label>
-            <select id="incomingVoiceSelect"></select>
-          </div>
-        </div>
-        <div id="langProgressWrap" class="progress-row" hidden>
-          <div class="progress-meta">
-            <div class="progress-track"><div id="langProgressBar" class="progress-fill"></div></div>
-            <span id="langProgressText" class="progress-text">0%</span>
-          </div>
-          <button id="cancelLangBtn" class="danger-outline" type="button">Batal</button>
-        </div>
-        <div class="model-row">
-          <div class="field">
-            <label for="whisperModelSelect">Model Whisper (STT / Pengenal Suara)</label>
-            <select id="whisperModelSelect"></select>
-          </div>
-          <button id="applyWhisperBtn" type="button">Pakai Model</button>
-        </div>
-        <div id="whisperProgressWrap" class="progress-row" hidden>
-          <div class="progress-meta">
-            <div class="progress-track"><div id="whisperProgressBar" class="progress-fill"></div></div>
-            <span id="whisperProgressText" class="progress-text">0%</span>
-          </div>
-          <button id="cancelWhisperBtn" class="danger-outline" type="button">Batal</button>
-        </div>
-      </section>
+      <div class="workspace">
+        <aside class="sidebar-panel" aria-label="Navigasi Pengaturan">
+          <nav class="settings-nav" role="tablist" aria-label="Kategori Pengaturan">
+            <button
+              class="nav-tab is-active"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              data-tab="lang"
+            >
+              Bahasa &amp; Model
+            </button>
+            <button
+              class="nav-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              data-tab="audio"
+            >
+              Routing Audio
+            </button>
+            <button
+              class="nav-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              data-tab="advanced"
+            >
+              Lanjutan
+            </button>
+          </nav>
 
-      <section class="section">
-        <div class="section-head">
-          <span class="section-title">Routing Audio (PipeWire / PulseAudio)</span>
-          <div class="controls-group">
-            <button id="setupVirtualBtn" type="button">Setup Virtual Audio</button>
-            <button id="refreshDevBtn" type="button">Refresh</button>
-          </div>
-        </div>
-        <div class="grid-2">
-          <div class="field">
-            <label for="micSelect">Mikrofon Fisik (Input)</label>
-            <select id="micSelect"></select>
-          </div>
-          <div class="field">
-            <div class="field-head">
-              <label for="vmicSelect">Virtual Mic Sink (Ke WA/Zoom)</label>
-              <label class="inline-toggle" title="Aktif: kirim suara AI ke lawan bicara. Nonaktif: transkrip teks saja.">
-                <input id="outgoingTtsChk" type="checkbox" checked />
-                <span id="outgoingTtsLabel">Suara AI</span>
-              </label>
-            </div>
-            <select id="vmicSelect"></select>
-          </div>
-          <div class="field">
-            <label for="vspkSelect">Virtual Speaker Monitor (Dari WA/Zoom)</label>
-            <select id="vspkSelect"></select>
-          </div>
-          <div class="field">
-            <div class="field-head">
-              <label for="hpSelect">Headphone / Speaker Fisik (Output)</label>
-              <label class="inline-toggle" title="Aktif: putar suara AI di headphone Anda. Nonaktif: transkrip teks saja.">
-                <input id="incomingTtsChk" type="checkbox" checked />
-                <span id="incomingTtsLabel">Suara AI</span>
-              </label>
-            </div>
-            <select id="hpSelect"></select>
-          </div>
-        </div>
-      </section>
+          <div class="settings-body">
+            <section class="settings-pane" data-pane="lang" role="tabpanel">
+              <div class="section">
+                <div class="section-head">
+                  <span class="section-title">Bahasa &amp; Suara AI</span>
+                  <button id="prepareBtn" type="button">Unduh Paket Bahasa</button>
+                </div>
+                <div class="lang-row">
+                  <div class="field">
+                    <label for="myLang">Bahasa Saya</label>
+                    <select id="myLang"></select>
+                  </div>
+                  <button id="swapLangBtn" class="icon-btn" type="button" title="Tukar bahasa">⇄</button>
+                  <div class="field">
+                    <label for="peerLang">Bahasa Lawan Bicara</label>
+                    <select id="peerLang"></select>
+                  </div>
+                </div>
+                <div class="stack">
+                  <div class="field">
+                    <label for="outgoingVoiceSelect">Suara AI Saya (Ke Lawan Bicara)</label>
+                    <select id="outgoingVoiceSelect"></select>
+                  </div>
+                  <div class="field">
+                    <label for="incomingVoiceSelect">Suara AI Lawan Bicara (Ke Headphone)</label>
+                    <select id="incomingVoiceSelect"></select>
+                  </div>
+                </div>
+                <div id="langProgressWrap" class="progress-row" hidden>
+                  <div class="progress-meta">
+                    <div class="progress-track"><div id="langProgressBar" class="progress-fill"></div></div>
+                    <span id="langProgressText" class="progress-text">0%</span>
+                  </div>
+                  <button id="cancelLangBtn" class="danger-outline" type="button">Batal</button>
+                </div>
+              </div>
 
-      <section class="section">
-        <div class="controls-bar">
-          <div class="controls-group">
-            <button id="startBtn" class="primary" type="button">Mulai Translasi</button>
-            <select id="modeSelect" aria-label="Mode Pemicu">
-              <option value="vad">Auto VAD</option>
-              <option value="ptt">Push-to-Talk</option>
-            </select>
-            <button id="pttBtn" type="button" hidden>Tahan untuk Bicara</button>
+              <div class="section">
+                <div class="section-head">
+                  <span class="section-title">Pengenal Suara (STT)</span>
+                </div>
+                <div class="model-row">
+                  <div class="field">
+                    <label for="whisperModelSelect">Model Whisper</label>
+                    <select id="whisperModelSelect"></select>
+                  </div>
+                  <button id="applyWhisperBtn" type="button">Pakai Model</button>
+                </div>
+                <div id="whisperProgressWrap" class="progress-row" hidden>
+                  <div class="progress-meta">
+                    <div class="progress-track"><div id="whisperProgressBar" class="progress-fill"></div></div>
+                    <span id="whisperProgressText" class="progress-text">0%</span>
+                  </div>
+                  <button id="cancelWhisperBtn" class="danger-outline" type="button">Batal</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="settings-pane" data-pane="audio" role="tabpanel" hidden>
+              <div class="section">
+                <div class="section-head">
+                  <span class="section-title">PipeWire / PulseAudio</span>
+                  <div class="controls-group">
+                    <button id="setupVirtualBtn" type="button">Setup Virtual</button>
+                    <button id="refreshDevBtn" type="button">Refresh</button>
+                  </div>
+                </div>
+                <div class="stack">
+                  <div class="field">
+                    <label for="micSelect">Mikrofon Fisik (Input)</label>
+                    <select id="micSelect"></select>
+                  </div>
+                  <div class="field">
+                    <div class="field-head">
+                      <label for="vmicSelect">Virtual Mic Sink (Ke WA/Zoom)</label>
+                      <label class="inline-toggle" title="Aktif: kirim suara AI ke lawan bicara. Nonaktif: transkrip teks saja.">
+                        <input id="outgoingTtsChk" type="checkbox" checked />
+                        <span id="outgoingTtsLabel">Suara AI</span>
+                      </label>
+                    </div>
+                    <select id="vmicSelect"></select>
+                  </div>
+                  <div class="field">
+                    <label for="vspkSelect">Virtual Speaker Monitor (Dari WA/Zoom)</label>
+                    <select id="vspkSelect"></select>
+                  </div>
+                  <div class="field">
+                    <div class="field-head">
+                      <label for="hpSelect">Headphone / Speaker Fisik (Output)</label>
+                      <label class="inline-toggle" title="Aktif: putar suara AI di headphone Anda. Nonaktif: transkrip teks saja.">
+                        <input id="incomingTtsChk" type="checkbox" checked />
+                        <span id="incomingTtsLabel">Suara AI</span>
+                      </label>
+                    </div>
+                    <select id="hpSelect"></select>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="settings-pane" data-pane="advanced" role="tabpanel" hidden>
+              <div class="section">
+                <div class="section-head">
+                  <span class="section-title">Engine &amp; VAD</span>
+                </div>
+                <div class="stack">
+                  <div class="field">
+                    <label for="translatorBackendSelect">Engine Terjemahan</label>
+                    <select id="translatorBackendSelect">
+                      <option value="nllb">NLLB-200 (Akurat · Offline)</option>
+                      <option value="argos">Argos Translate (Ringan)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <div class="field-head">
+                      <label for="ttsSpeedSlider">Kecepatan Suara AI</label>
+                      <span id="ttsSpeedVal" class="range-val">1.00x</span>
+                    </div>
+                    <input id="ttsSpeedSlider" type="range" min="75" max="135" value="100" />
+                  </div>
+                  <div class="field">
+                    <div class="field-head">
+                      <label for="vadThresholdSlider">Sensitivitas Mic / VAD</label>
+                      <span id="vadThresholdVal" class="range-val">350</span>
+                    </div>
+                    <input id="vadThresholdSlider" type="range" min="150" max="900" step="25" value="350" />
+                  </div>
+                  <div class="field">
+                    <div class="field-head">
+                      <label for="vadSilenceSlider">Jeda Akhir Kalimat</label>
+                      <span id="vadSilenceVal" class="range-val">750 ms</span>
+                    </div>
+                    <input id="vadSilenceSlider" type="range" min="400" max="1500" step="50" value="750" />
+                  </div>
+                  <label class="toggle-chip">
+                    <input id="peerAutoLangChk" type="checkbox" />
+                    <span>Deteksi Otomatis Bahasa Lawan Bicara</span>
+                  </label>
+                </div>
+              </div>
+            </section>
           </div>
-          <div class="controls-group">
-            <label class="toggle-chip">
-              <input id="bypassChk" type="checkbox" />
-              <span>Bypass Mic</span>
-            </label>
-            <div class="slider-wrap">
-              <label for="duckSlider">Ducking</label>
-              <input id="duckSlider" type="range" min="0" max="100" value="18" />
-              <span id="duckVal">18%</span>
-            </div>
-            <button id="pipBtn" type="button">Pop-out Subtitle</button>
-          </div>
-        </div>
-        <details class="tuning-panel">
-          <summary>Pengaturan Lanjutan (VAD, Suara AI &amp; Engine)</summary>
-          <div class="grid-2 tuning-grid">
-            <div class="field">
-              <label for="translatorBackendSelect">Engine Terjemahan</label>
-              <select id="translatorBackendSelect">
-                <option value="nllb">NLLB-200 (Akurat · Offline)</option>
-                <option value="argos">Argos Translate (Ringan)</option>
+
+          <div class="sidebar-footer">
+            <div class="footer-row">
+              <button id="startBtn" class="primary" type="button">Mulai Translasi</button>
+              <select id="modeSelect" aria-label="Mode Pemicu">
+                <option value="vad">Auto VAD</option>
+                <option value="ptt">Push-to-Talk</option>
               </select>
             </div>
-            <div class="field">
-              <label for="ttsSpeedSlider">Kecepatan Suara AI (<span id="ttsSpeedVal">1.00x</span>)</label>
-              <input id="ttsSpeedSlider" type="range" min="75" max="135" value="100" />
-            </div>
-            <div class="field">
-              <label for="vadThresholdSlider">Sensitivitas Mic / VAD (<span id="vadThresholdVal">350</span>)</label>
-              <input id="vadThresholdSlider" type="range" min="150" max="900" step="25" value="350" />
-            </div>
-            <div class="field">
-              <label for="vadSilenceSlider">Jeda Akhir Kalimat (<span id="vadSilenceVal">750 ms</span>)</label>
-              <input id="vadSilenceSlider" type="range" min="400" max="1500" step="50" value="750" />
+            <button id="pttBtn" class="ptt-btn" type="button" hidden>Tahan untuk Bicara</button>
+            <div class="footer-row footer-meta">
+              <label class="toggle-chip">
+                <input id="bypassChk" type="checkbox" />
+                <span>Bypass Mic</span>
+              </label>
+              <div class="slider-wrap">
+                <label for="duckSlider">Ducking</label>
+                <input id="duckSlider" type="range" min="0" max="100" value="18" />
+                <span id="duckVal">18%</span>
+              </div>
             </div>
           </div>
-          <label class="toggle-chip tuning-check">
-            <input id="peerAutoLangChk" type="checkbox" />
-            <span>Deteksi Otomatis Bahasa Lawan Bicara (Auto-Detect STT)</span>
-          </label>
-        </details>
-      </section>
+        </aside>
 
-      <section class="section">
-        <div class="section-head">
-          <span class="section-title">Transkrip Langsung</span>
-          <span id="hintMsg" class="status-pill"></span>
-        </div>
-        <div id="feed" class="transcript-feed"></div>
-        <div class="test-row">
-          <input id="testInput" type="text" placeholder="Ketik teks uji coba (contoh: Halo, apa kabar?)" />
-          <button id="testOutBtn" type="button">Uji Outgoing</button>
-          <button id="testInBtn" type="button">Uji Incoming</button>
-        </div>
-      </section>
+        <section class="transcript-panel" aria-label="Transkrip Langsung dan Testing">
+          <div class="panel-head">
+            <span class="section-title">Transkrip Langsung</span>
+            <div class="controls-group">
+              <span id="hintMsg" class="status-pill hint-pill"></span>
+              <button id="pipBtn" type="button">Pop-out Subtitle</button>
+            </div>
+          </div>
+
+          <div id="feed" class="transcript-feed"></div>
+
+          <div class="test-bar">
+            <div class="test-row">
+              <input id="testInput" type="text" placeholder="Ketik teks uji coba (contoh: Halo, apa kabar?)" />
+              <button id="testOutBtn" type="button">Uji Outgoing</button>
+              <button id="testInBtn" type="button">Uji Incoming</button>
+            </div>
+          </div>
+        </section>
+      </div>
     </main>
     <script src="/static/app.js"></script>
   </body>
 </html>
-

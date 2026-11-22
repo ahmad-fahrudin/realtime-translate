@@ -713,5 +713,24 @@ el("testInBtn").addEventListener("click", () => {
   if (text) sendWs({ cmd: "test_text", channel: "incoming", text, config: getConfig() });
 });
 
+function initSettingsTabs() {
+  const tabs = document.querySelectorAll(".nav-tab[data-tab]");
+  const panes = document.querySelectorAll(".settings-pane[data-pane]");
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const target = tab.dataset.tab;
+      tabs.forEach((t) => {
+        const active = t === tab;
+        t.classList.toggle("is-active", active);
+        t.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      panes.forEach((pane) => {
+        pane.hidden = pane.dataset.pane !== target;
+      });
+    });
+  });
+}
+
+initSettingsTabs();
 init();
 
