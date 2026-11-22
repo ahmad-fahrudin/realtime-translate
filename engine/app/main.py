@@ -71,6 +71,7 @@ async def health() -> dict[str, object]:
     return {
         "status": "ok",
         "whisper_model": settings.whisper_model,
+        "whisper_device": engine.stt.active_device,
         "bridge_running": bridge.running,
         "installed_translation_pairs": engine.translator.installed_pairs(),
         "installed_tts_languages": engine.tts.installed_languages(),

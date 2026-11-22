@@ -7,11 +7,14 @@ services:
     ports:
       - "8765:8765"
     environment:
-      - RT_WHISPER_MODEL=base
+      - RT_WHISPER_MODEL=small
+      - RT_WHISPER_DEVICE=auto
       - RT_WHISPER_COMPUTE_TYPE=int8
       - RT_WHISPER_CPU_THREADS=4
       - RT_PRELOAD_DEFAULT_MODELS=true
       - PULSE_SERVER=unix:/run/pulse/native
+      - LD_LIBRARY_PATH=/models/cuda_libs/nvidia/cublas/lib
+    gpus: all
     volumes:
       - ./engine/app:/app/app
       - ./engine/tests:/app/tests

@@ -1,9 +1,13 @@
 from dataclasses import dataclass
+import logging
 import threading
+import ctranslate2
 import numpy as np
 from faster_whisper import WhisperModel
 
 from .config import settings
+
+logger = logging.getLogger("rt-stt")
 
 
 @dataclass
@@ -14,23 +18,56 @@ class STTResult:
 
 
 class FasterWhisperSTT:
-    """Offline CPU INT8 Speech-to-Text backed by faster-whisper."""
+    """Offline Speech-to-Text backed by faster-whisper (CUDA auto-detect with CPU fallback)."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._infer_lock = threading.Lock()
         self._model: WhisperModel | None = None
+        self.active_device: str = "unloaded"
+
+    def _resolve_device(self) -> str:
+        req = (settings.whisper_device or "auto").lower()
+        if req == "auto":
+            try:
+                return "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+            except Exception:
+                return "cpu"
+        return req
 
     def load(self) -> WhisperModel:
         if self._model is None:
             with self._lock:
                 if self._model is None:
-                    self._model = WhisperModel(
-                        settings.whisper_model,
-                        device="cpu",
-                        compute_type=settings.whisper_compute_type,
-                        cpu_threads=settings.whisper_cpu_threads,
-                    )
+                    device = self._resolve_device()
+                    try:
+                        self._model = WhisperModel(
+                            settings.whisper_model,
+                            device=device,
+                            compute_type=settings.whisper_compute_type,
+                            cpu_threads=settings.whisper_cpu_threads,
+                        )
+                        self.active_device = device
+                        logger.info(
+                            "Loaded Whisper '%s' on %s (%s)",
+                            settings.whisper_model,
+                            device,
+                            settings.whisper_compute_type,
+                        )
+                    except Exception as exc:
+                        if device != "cpu":
+                            logger.warning(
+                                "Whisper CUDA load failed (%s); falling back to CPU int8", exc
+                            )
+                            self._model = WhisperModel(
+                                settings.whisper_model,
+                                device="cpu",
+                                compute_type="int8",
+                                cpu_threads=settings.whisper_cpu_threads,
+                            )
+                            self.active_device = "cpu"
+                        else:
+                            raise
         return self._model
 
     def transcribe(self, audio_f32: np.ndarray, src_lang: str = "auto") -> STTResult | None:

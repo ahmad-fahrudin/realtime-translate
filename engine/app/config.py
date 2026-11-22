@@ -9,8 +9,9 @@ class Settings(BaseSettings):
     port: int = 8765
     models_dir: str = "/models"
 
-    # STT (Faster-Whisper CPU int8)
-    whisper_model: str = "base"
+    # STT (Faster-Whisper)
+    whisper_model: str = "small"
+    whisper_device: str = "auto"
     whisper_compute_type: str = "int8"
     whisper_cpu_threads: int = 4
 
