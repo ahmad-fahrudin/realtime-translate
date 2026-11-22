@@ -84,6 +84,20 @@ class StreamingVAD:
             return False
         return self.vad.is_speech(frame, self.sample_rate)
 
+    def configure(
+        self,
+        energy_threshold: float | None = None,
+        silence_ms: int | None = None,
+    ) -> None:
+        with self._lock:
+            if energy_threshold is not None:
+                val = max(80.0, min(2000.0, float(energy_threshold)))
+                self.energy_threshold = val
+                self.continue_energy_threshold = min(val, max(100.0, round(val * 0.52, 1)))
+            if silence_ms is not None:
+                ms = max(250, min(3000, int(silence_ms)))
+                self.silence_frames_limit = max(1, ms // self.frame_duration_ms)
+
     def set_mode(self, mode: str) -> None:
         with self._lock:
             if mode in ("vad", "ptt") and mode != self.mode:

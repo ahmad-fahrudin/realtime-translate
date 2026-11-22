@@ -200,6 +200,7 @@ class PiperTTS:
         text: str,
         lang: str,
         voice_id: str | None = None,
+        speed: float = 1.0,
     ) -> TTSAudio | None:
         clean = text.strip()
         if not clean:
@@ -211,7 +212,15 @@ class PiperTTS:
         voice, meta = loaded
 
         speaker_id = meta.get("speaker_id")
-        syn_cfg = SynthesisConfig(speaker_id=int(speaker_id)) if speaker_id is not None else None
+        clamped_speed = max(0.5, min(2.0, float(speed)))
+        length_scale = round(1.0 / clamped_speed, 3) if abs(clamped_speed - 1.0) >= 0.01 else None
+        if speaker_id is not None or length_scale is not None:
+            syn_cfg = SynthesisConfig(
+                speaker_id=int(speaker_id) if speaker_id is not None else None,
+                length_scale=length_scale,
+            )
+        else:
+            syn_cfg = None
 
         chunks: list[bytes] = []
         if hasattr(voice, "synthesize_stream_raw"):

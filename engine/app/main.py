@@ -94,10 +94,27 @@ def _make_progress_callback(kind: str, target: str, loop: asyncio.AbstractEventL
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    saved_prefs = _load_ui_prefs()
+    bridge.update_config(saved_prefs)
     if settings.preload_default_models:
-        logger.info("Preloading Whisper (%s) + Argos (id<->en) + Piper (id, en)...", settings.whisper_model)
+        logger.info(
+            "Preloading Whisper (%s) + Translator (%s) + Piper (%s, %s)...",
+            engine.stt.active_model_name,
+            engine.translator.preferred_backend,
+            saved_prefs["my_lang"],
+            saved_prefs["peer_lang"],
+        )
         try:
-            await asyncio.to_thread(engine.preload_defaults)
+            await asyncio.to_thread(
+                engine.prepare_pair,
+                str(saved_prefs["my_lang"]),
+                str(saved_prefs["peer_lang"]),
+                True,
+                None,
+                None,
+                str(saved_prefs["outgoing_voice"]),
+                str(saved_prefs["incoming_voice"]),
+            )
             logger.info("Default offline models ready.")
         except Exception as exc:
             logger.warning("Preload warning (models can still load on demand): %s", exc)
@@ -126,36 +143,63 @@ class VoicePrefsRequest(BaseModel):
     incoming_voice: str = "auto"
 
 
+_DEFAULT_UI_PREFS: dict[str, Any] = {
+    "my_lang": "id",
+    "peer_lang": "en",
+    "outgoing_voice": "auto",
+    "incoming_voice": "auto",
+    "mic_source": "",
+    "vmic_sink": "RT_Virtual_Mic_Sink",
+    "vspeaker_monitor": "RT_Virtual_Speaker_Sink.monitor",
+    "headphone_sink": "",
+    "mode": "vad",
+    "bypass": False,
+    "ducking_level": 0.18,
+    "outgoing_tts_enabled": True,
+    "incoming_tts_enabled": True,
+    "tts_speed": 1.0,
+    "vad_energy_threshold": settings.vad_energy_threshold,
+    "vad_silence_ms": settings.vad_silence_ms,
+    "peer_auto_detect": False,
+    "translator_backend": settings.translator_backend,
+}
+
+
+def _ui_prefs_path() -> Path:
+    return Path(settings.models_dir) / "ui_prefs.json"
+
+
 def _voice_prefs_path() -> Path:
     return Path(settings.models_dir) / "voice_prefs.json"
 
 
-def _load_voice_prefs() -> dict[str, str]:
-    default = {"outgoing_voice": "auto", "incoming_voice": "auto"}
-    path = _voice_prefs_path()
-    try:
-        if path.exists():
-            raw = json.loads(path.read_text(encoding="utf-8"))
+def _load_ui_prefs() -> dict[str, Any]:
+    prefs = dict(_DEFAULT_UI_PREFS)
+    # Migrate legacy voice_prefs.json if ui_prefs.json doesn't exist yet
+    legacy = _voice_prefs_path()
+    path = _ui_prefs_path()
+    source = path if path.exists() else (legacy if legacy.exists() else None)
+    if source is not None:
+        try:
+            raw = json.loads(source.read_text(encoding="utf-8"))
             if isinstance(raw, dict):
-                return {
-                    "outgoing_voice": str(raw.get("outgoing_voice", "auto")),
-                    "incoming_voice": str(raw.get("incoming_voice", "auto")),
-                }
-    except Exception:
-        pass
-    return default
+                for key in prefs:
+                    if key in raw and raw[key] is not None:
+                        prefs[key] = raw[key]
+        except Exception:
+            pass
+    return prefs
 
 
-def _save_voice_prefs(outgoing_voice: str | None = None, incoming_voice: str | None = None) -> dict[str, str]:
-    prefs = _load_voice_prefs()
-    if outgoing_voice is not None:
-        prefs["outgoing_voice"] = outgoing_voice
-    if incoming_voice is not None:
-        prefs["incoming_voice"] = incoming_voice
+def _save_ui_prefs(patch: dict[str, Any]) -> dict[str, Any]:
+    prefs = _load_ui_prefs()
+    for key in _DEFAULT_UI_PREFS:
+        if key in patch and patch[key] is not None:
+            prefs[key] = patch[key]
     try:
-        path = _voice_prefs_path()
+        path = _ui_prefs_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(prefs), encoding="utf-8")
+        path.write_text(json.dumps(prefs, indent=2), encoding="utf-8")
     except OSError:
         pass
     return prefs
@@ -168,6 +212,7 @@ async def index() -> FileResponse:
 
 @app.get("/health")
 async def health() -> dict[str, object]:
+    prefs = _load_ui_prefs()
     return {
         "status": "ok",
         "whisper_model": engine.stt.active_model_name,
@@ -178,24 +223,51 @@ async def health() -> dict[str, object]:
         "bridge_running": bridge.running,
         "installed_translation_pairs": engine.translator.installed_pairs(),
         "installed_tts_languages": engine.tts.installed_languages(),
-        "voice_prefs": _load_voice_prefs(),
+        "voice_prefs": {
+            "outgoing_voice": prefs["outgoing_voice"],
+            "incoming_voice": prefs["incoming_voice"],
+        },
+        "prefs": prefs,
+    }
+
+
+@app.get("/prefs")
+async def get_prefs() -> dict[str, Any]:
+    return _load_ui_prefs()
+
+
+@app.post("/prefs")
+async def save_prefs(patch: dict[str, Any]) -> dict[str, Any]:
+    bridge.update_config(patch)
+    saved = _save_ui_prefs(patch)
+    return {
+        "prefs": saved,
+        "translator_backend": engine.translator.active_backend,
+        "translator_device": engine.translator.active_device,
     }
 
 
 @app.get("/voices")
 async def get_voices() -> dict[str, object]:
+    prefs = _load_ui_prefs()
     return {
         "voices": engine.tts.list_voices_by_lang(),
-        "prefs": _load_voice_prefs(),
+        "prefs": {
+            "outgoing_voice": prefs["outgoing_voice"],
+            "incoming_voice": prefs["incoming_voice"],
+        },
     }
 
 
 @app.post("/voices/prefs")
-async def save_voices_prefs(req: VoicePrefsRequest) -> dict[str, str]:
-    bridge.update_config(
-        {"outgoing_voice": req.outgoing_voice, "incoming_voice": req.incoming_voice}
-    )
-    return _save_voice_prefs(req.outgoing_voice, req.incoming_voice)
+async def save_voices_prefs(req: VoicePrefsRequest) -> dict[str, object]:
+    patch = {"outgoing_voice": req.outgoing_voice, "incoming_voice": req.incoming_voice}
+    bridge.update_config(patch)
+    saved = _save_ui_prefs(patch)
+    return {
+        "outgoing_voice": saved["outgoing_voice"],
+        "incoming_voice": saved["incoming_voice"],
+    }
 
 
 @app.get("/models/whisper")
@@ -453,7 +525,7 @@ async def ws_control(ws: WebSocket) -> None:
             if cmd == "start":
                 cfg = msg.get("config", {})
                 if isinstance(cfg, dict):
-                    _save_voice_prefs(cfg.get("outgoing_voice"), cfg.get("incoming_voice"))
+                    _save_ui_prefs(cfg)
                 await bridge.start(cfg)
             elif cmd == "stop":
                 await bridge.stop()
@@ -463,7 +535,7 @@ async def ws_control(ws: WebSocket) -> None:
                 cfg = msg.get("config", {})
                 bridge.update_config(cfg)
                 if isinstance(cfg, dict):
-                    _save_voice_prefs(cfg.get("outgoing_voice"), cfg.get("incoming_voice"))
+                    _save_ui_prefs(cfg)
                 if bridge.running and (
                     bridge.config.my_lang != prev_my or bridge.config.peer_lang != prev_peer
                 ):

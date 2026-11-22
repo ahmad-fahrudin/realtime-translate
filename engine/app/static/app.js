@@ -7,7 +7,26 @@ let engineLabel = "Engine: Ready";
 let activeWhisperModel = "small";
 let activeTranslatorBackend = "nllb";
 let voicesByLang = {};
-let savedVoicePrefs = { outgoing_voice: "auto", incoming_voice: "auto" };
+let savedPrefs = {
+  my_lang: "id",
+  peer_lang: "en",
+  outgoing_voice: "auto",
+  incoming_voice: "auto",
+  mic_source: "",
+  vmic_sink: "RT_Virtual_Mic_Sink",
+  vspeaker_monitor: "RT_Virtual_Speaker_Sink.monitor",
+  headphone_sink: "",
+  mode: "vad",
+  bypass: false,
+  ducking_level: 0.18,
+  outgoing_tts_enabled: true,
+  incoming_tts_enabled: true,
+  tts_speed: 1.0,
+  vad_energy_threshold: 350,
+  vad_silence_ms: 750,
+  peer_auto_detect: false,
+  translator_backend: "nllb",
+};
 
 function populateVoiceSelect(selectEl, lang, preferredId) {
   if (!selectEl) return;
@@ -35,12 +54,12 @@ function refreshVoiceSelects(useSavedPrefs = false) {
   populateVoiceSelect(
     el("outgoingVoiceSelect"),
     el("peerLang").value,
-    useSavedPrefs ? savedVoicePrefs.outgoing_voice : null
+    useSavedPrefs ? savedPrefs.outgoing_voice : null
   );
   populateVoiceSelect(
     el("incomingVoiceSelect"),
     el("myLang").value,
-    useSavedPrefs ? savedVoicePrefs.incoming_voice : null
+    useSavedPrefs ? savedPrefs.incoming_voice : null
   );
 }
 
@@ -73,8 +92,8 @@ function syncWhisperApplyBtn() {
 function populateLanguages(items) {
   const myLang = el("myLang");
   const peerLang = el("peerLang");
-  const prevMy = myLang.value || "id";
-  const prevPeer = peerLang.value || "en";
+  const prevMy = myLang.value || savedPrefs.my_lang || "id";
+  const prevPeer = peerLang.value || savedPrefs.peer_lang || "en";
 
   myLang.innerHTML = "";
   peerLang.innerHTML = "";
@@ -83,12 +102,12 @@ function populateLanguages(items) {
     myLang.add(new Option(label, lang.code));
     peerLang.add(new Option(label, lang.code));
   }
-  myLang.value = prevMy;
-  peerLang.value = prevPeer;
+  if ([...myLang.options].some((o) => o.value === prevMy)) myLang.value = prevMy;
+  if ([...peerLang.options].some((o) => o.value === prevPeer)) peerLang.value = prevPeer;
 }
 
-function populateDeviceSelect(selectEl, devices, preferredMatchers = []) {
-  const prev = selectEl.value;
+function populateDeviceSelect(selectEl, devices, preferredMatchers = [], savedId = "") {
+  const prev = selectEl.value || savedId;
   selectEl.innerHTML = "";
   selectEl.add(new Option("-- Tidak dipilih --", ""));
   let autoPick = "";
@@ -125,10 +144,25 @@ function applyDevices(devices) {
     (d) => !/^RT_Virtual_/i.test(d.id) && !/RT_Virtual_/i.test(d.name)
   );
 
-  populateDeviceSelect(el("micSelect"), physicalMics, [/bluez_input\./i, /alsa_input\./i, /mic|headset/i]);
-  populateDeviceSelect(el("vmicSelect"), virtualMicSinks, [/^RT_Virtual_Mic_Sink$/i]);
-  populateDeviceSelect(el("vspkSelect"), virtualSpeakerMonitors, [/^RT_Virtual_Speaker_Sink\.monitor$/i]);
-  populateDeviceSelect(el("hpSelect"), physicalOutputs, [/bluez_output\./i, /alsa_output\./i, /analog|headphone|speaker/i]);
+  populateDeviceSelect(
+    el("micSelect"),
+    physicalMics,
+    [/bluez_input\./i, /alsa_input\./i, /mic|headset/i],
+    savedPrefs.mic_source
+  );
+  populateDeviceSelect(el("vmicSelect"), virtualMicSinks, [/^RT_Virtual_Mic_Sink$/i], savedPrefs.vmic_sink);
+  populateDeviceSelect(
+    el("vspkSelect"),
+    virtualSpeakerMonitors,
+    [/^RT_Virtual_Speaker_Sink\.monitor$/i],
+    savedPrefs.vspeaker_monitor
+  );
+  populateDeviceSelect(
+    el("hpSelect"),
+    physicalOutputs,
+    [/bluez_output\./i, /alsa_output\./i, /analog|headphone|speaker/i],
+    savedPrefs.headphone_sink
+  );
 }
 
 function getConfig() {
@@ -144,6 +178,13 @@ function getConfig() {
     mode: el("modeSelect").value,
     bypass: el("bypassChk").checked,
     ducking_level: Number(el("duckSlider").value) / 100,
+    outgoing_tts_enabled: el("outgoingTtsChk").checked,
+    incoming_tts_enabled: el("incomingTtsChk").checked,
+    tts_speed: Number(el("ttsSpeedSlider").value) / 100,
+    vad_energy_threshold: Number(el("vadThresholdSlider").value),
+    vad_silence_ms: Number(el("vadSilenceSlider").value),
+    peer_auto_detect: el("peerAutoLangChk").checked,
+    translator_backend: el("translatorBackendSelect").value,
   };
 }
 
@@ -211,8 +252,15 @@ const LOCKABLE_CONTROL_IDS = [
   "vspkSelect",
   "hpSelect",
   "modeSelect",
+  "outgoingTtsChk",
+  "incomingTtsChk",
   "bypassChk",
   "duckSlider",
+  "translatorBackendSelect",
+  "ttsSpeedSlider",
+  "vadThresholdSlider",
+  "vadSilenceSlider",
+  "peerAutoLangChk",
   "testInput",
   "testOutBtn",
   "testInBtn",
@@ -223,8 +271,9 @@ function setControlsLocked(locked) {
     const node = el(id);
     if (node) node.disabled = locked;
   }
-  const bypassChip = el("bypassChk")?.closest(".toggle-chip");
-  if (bypassChip) bypassChip.classList.toggle("is-disabled", locked);
+  document.querySelectorAll(".toggle-chip, .inline-toggle").forEach((chip) => {
+    chip.classList.toggle("is-disabled", locked);
+  });
   if (!locked) {
     syncWhisperApplyBtn();
   }
@@ -295,7 +344,7 @@ function connectControlWs() {
       const mt = msg.translator_backend || activeTranslatorBackend;
       engineLabel = `Ready · ${activeWhisperModel} (${dev}) · ${mt}`;
       el("engineStatus").textContent = engineLabel;
-      fetch("/models/whisper").then((r) => r.json()).then(populateWhisperModels).catch(() => {});
+      fetch("/models/whisper").then((r) => r.json()).then(populateWhisperModels).catch(() => { });
     } else if (msg.event === "error") {
       el("hintMsg").textContent = msg.message;
       if (!isRunning) {
@@ -332,17 +381,91 @@ async function openPipOverlay() {
   `;
 }
 
+function syncTtsLabels() {
+  const outOn = el("outgoingTtsChk").checked;
+  const inOn = el("incomingTtsChk").checked;
+  el("outgoingTtsLabel").textContent = outOn ? "Suara AI" : "Hanya Teks";
+  el("incomingTtsLabel").textContent = inOn ? "Suara AI" : "Hanya Teks";
+  el("outgoingTtsChk").closest(".inline-toggle")?.classList.toggle("is-muted", !outOn);
+  el("incomingTtsChk").closest(".inline-toggle")?.classList.toggle("is-muted", !inOn);
+}
+
+function applySavedControls(prefs) {
+  if (!prefs) return;
+  savedPrefs = { ...savedPrefs, ...prefs };
+  if (prefs.mode) {
+    el("modeSelect").value = prefs.mode;
+    el("pttBtn").hidden = prefs.mode !== "ptt";
+  }
+  el("bypassChk").checked = Boolean(prefs.bypass);
+  el("outgoingTtsChk").checked = prefs.outgoing_tts_enabled !== false;
+  el("incomingTtsChk").checked = prefs.incoming_tts_enabled !== false;
+  syncTtsLabels();
+
+  const duckPct = Math.round((Number(prefs.ducking_level ?? 0.18)) * 100);
+  el("duckSlider").value = String(duckPct);
+  el("duckVal").textContent = `${duckPct}%`;
+
+  const speedPct = Math.round((Number(prefs.tts_speed ?? 1.0)) * 100);
+  el("ttsSpeedSlider").value = String(speedPct);
+  el("ttsSpeedVal").textContent = `${(speedPct / 100).toFixed(2)}x`;
+
+  const vadTh = Number(prefs.vad_energy_threshold ?? 350);
+  el("vadThresholdSlider").value = String(vadTh);
+  el("vadThresholdVal").textContent = String(vadTh);
+
+  const vadSil = Number(prefs.vad_silence_ms ?? 750);
+  el("vadSilenceSlider").value = String(vadSil);
+  el("vadSilenceVal").textContent = `${vadSil} ms`;
+
+  el("peerAutoLangChk").checked = Boolean(prefs.peer_auto_detect);
+  if (prefs.translator_backend) {
+    el("translatorBackendSelect").value = prefs.translator_backend;
+    activeTranslatorBackend = prefs.translator_backend;
+  }
+}
+
+let prefsSaveTimer = null;
+function persistPrefsNow() {
+  const cfg = getConfig();
+  savedPrefs = { ...savedPrefs, ...cfg };
+  fetch("/prefs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(cfg),
+  })
+    .then((r) => r.json())
+    .then((data) => {
+      if (data && data.translator_backend) {
+        activeTranslatorBackend = data.translator_backend;
+        const dev = engineLabel.match(/\(([^)]+)\)/)?.[1] || "cuda";
+        engineLabel = `Ready · ${activeWhisperModel} (${dev}) · ${activeTranslatorBackend}`;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          el("engineStatus").textContent = engineLabel;
+        }
+      }
+    })
+    .catch(() => { });
+}
+
+function schedulePersistPrefs() {
+  if (prefsSaveTimer) clearTimeout(prefsSaveTimer);
+  prefsSaveTimer = setTimeout(persistPrefsNow, 150);
+}
+
 async function init() {
-  const [langRes, devRes, healthRes, whisperRes, voicesRes] = await Promise.all([
+  const [langRes, devRes, healthRes, whisperRes, voicesRes, prefsRes] = await Promise.all([
     fetch("/languages").then((r) => r.json()),
     fetch("/audio/devices").then((r) => r.json()),
     fetch("/health").then((r) => r.json()).catch(() => null),
     fetch("/models/whisper").then((r) => r.json()).catch(() => null),
     fetch("/voices").then((r) => r.json()).catch(() => null),
+    fetch("/prefs").then((r) => r.json()).catch(() => null),
   ]);
+  applySavedControls(prefsRes);
   if (healthRes && healthRes.whisper_model) {
     activeWhisperModel = healthRes.whisper_model;
-    activeTranslatorBackend = healthRes.translator_backend || "nllb";
+    activeTranslatorBackend = healthRes.translator_backend || activeTranslatorBackend;
     const dev = healthRes.whisper_device || "cpu";
     engineLabel = `Ready · ${activeWhisperModel} (${dev}) · ${activeTranslatorBackend}`;
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -351,7 +474,6 @@ async function init() {
   }
   if (voicesRes && voicesRes.voices) {
     voicesByLang = voicesRes.voices;
-    if (voicesRes.prefs) savedVoicePrefs = voicesRes.prefs;
   }
   populateLanguages(langRes.languages || []);
   refreshVoiceSelects(true);
@@ -413,7 +535,7 @@ el("applyWhisperBtn").addEventListener("click", async () => {
 el("cancelWhisperBtn").addEventListener("click", async () => {
   el("cancelWhisperBtn").disabled = true;
   el("whisperProgressText").textContent = "Membatalkan unduhan...";
-  await fetch("/models/whisper/cancel", { method: "POST" }).catch(() => {});
+  await fetch("/models/whisper/cancel", { method: "POST" }).catch(() => { });
 });
 
 el("refreshDevBtn").addEventListener("click", async () => {
@@ -483,7 +605,7 @@ el("prepareBtn").addEventListener("click", async () => {
 el("cancelLangBtn").addEventListener("click", async () => {
   el("cancelLangBtn").disabled = true;
   el("langProgressText").textContent = "Membatalkan unduhan...";
-  await fetch("/models/prepare/cancel", { method: "POST" }).catch(() => {});
+  await fetch("/models/prepare/cancel", { method: "POST" }).catch(() => { });
 });
 
 el("startBtn").addEventListener("click", () => {
@@ -508,6 +630,7 @@ el("startBtn").addEventListener("click", () => {
 el("modeSelect").addEventListener("change", () => {
   const isPtt = el("modeSelect").value === "ptt";
   el("pttBtn").hidden = !isPtt;
+  persistPrefsNow();
   if (isRunning) sendWs({ cmd: "update_config", config: getConfig() });
 });
 
@@ -525,33 +648,59 @@ el("pttBtn").addEventListener("touchstart", (e) => {
   setPttState(true);
 });
 el("pttBtn").addEventListener("touchend", () => setPttState(false));
-el("bypassChk").addEventListener("change", () => {
-  if (isRunning) sendWs({ cmd: "update_config", config: getConfig() });
+
+["micSelect", "vmicSelect", "vspkSelect", "hpSelect"].forEach((id) => {
+  el(id).addEventListener("change", persistPrefsNow);
 });
+
+["bypassChk", "outgoingTtsChk", "incomingTtsChk", "peerAutoLangChk", "translatorBackendSelect"].forEach((id) => {
+  el(id).addEventListener("change", () => {
+    syncTtsLabels();
+    persistPrefsNow();
+    if (isRunning) sendWs({ cmd: "update_config", config: getConfig() });
+  });
+});
+
 el("duckSlider").addEventListener("input", () => {
   el("duckVal").textContent = `${el("duckSlider").value}%`;
+  schedulePersistPrefs();
   if (isRunning) sendWs({ cmd: "update_config", config: getConfig() });
 });
+el("ttsSpeedSlider").addEventListener("input", () => {
+  el("ttsSpeedVal").textContent = `${(Number(el("ttsSpeedSlider").value) / 100).toFixed(2)}x`;
+  schedulePersistPrefs();
+});
+el("vadThresholdSlider").addEventListener("input", () => {
+  el("vadThresholdVal").textContent = el("vadThresholdSlider").value;
+  schedulePersistPrefs();
+});
+el("vadSilenceSlider").addEventListener("input", () => {
+  el("vadSilenceVal").textContent = `${el("vadSilenceSlider").value} ms`;
+  schedulePersistPrefs();
+});
+
 ["myLang", "peerLang"].forEach((id) => {
   el(id).addEventListener("change", () => {
     refreshVoiceSelects(false);
+    persistPrefsNow();
     if (isRunning) sendWs({ cmd: "update_config", config: getConfig() });
   });
 });
 
 ["outgoingVoiceSelect", "incomingVoiceSelect"].forEach((id) => {
   el(id).addEventListener("change", () => {
-    const cfg = getConfig();
-    fetch("/voices/prefs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        outgoing_voice: cfg.outgoing_voice,
-        incoming_voice: cfg.incoming_voice,
-      }),
-    }).catch(() => {});
-    if (isRunning) sendWs({ cmd: "update_config", config: cfg });
+    persistPrefsNow();
+    if (isRunning) sendWs({ cmd: "update_config", config: getConfig() });
   });
+});
+
+el("swapLangBtn").addEventListener("click", () => {
+  const a = el("myLang").value;
+  el("myLang").value = el("peerLang").value;
+  el("peerLang").value = a;
+  refreshVoiceSelects(false);
+  persistPrefsNow();
+  if (isRunning) sendWs({ cmd: "update_config", config: getConfig() });
 });
 
 el("pipBtn").addEventListener("click", openPipOverlay);

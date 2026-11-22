@@ -176,10 +176,64 @@ button.danger-outline:hover:not(:disabled) {
   background: rgba(239, 68, 68, 0.15);
 }
 
+.tuning-panel {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.tuning-panel summary {
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.tuning-panel summary:hover {
+  color: var(--text);
+}
+
+.tuning-grid {
+  margin-top: 12px;
+}
+
+.tuning-grid input[type="range"] {
+  width: 100%;
+}
+
+.tuning-check {
+  margin-top: 10px;
+}
+
 .field {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.inline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.inline-toggle.is-muted {
+  color: var(--muted);
+}
+
+.inline-toggle.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 label {

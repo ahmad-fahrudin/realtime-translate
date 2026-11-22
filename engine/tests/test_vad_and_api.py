@@ -163,6 +163,48 @@ def test_whisper_model_selection_persists(tmp_path, monkeypatch):
     assert stt_2.active_model_name == "base"
 
 
+def test_ui_prefs_roundtrip_and_vad_configure(tmp_path, monkeypatch):
+    from app.config import settings
+    from app.vad import StreamingVAD
+
+    monkeypatch.setattr(settings, "models_dir", str(tmp_path))
+
+    client = TestClient(app)
+    res_post = client.post(
+        "/prefs",
+        json={
+            "my_lang": "en",
+            "peer_lang": "id",
+            "outgoing_tts_enabled": False,
+            "incoming_tts_enabled": True,
+            "tts_speed": 1.2,
+            "vad_energy_threshold": 500,
+            "vad_silence_ms": 900,
+            "peer_auto_detect": True,
+            "translator_backend": "argos",
+        },
+    )
+    assert res_post.status_code == 200
+    assert res_post.json()["translator_backend"] == "argos"
+
+    res_get = client.get("/prefs")
+    assert res_get.status_code == 200
+    data = res_get.json()
+    assert data["my_lang"] == "en"
+    assert data["outgoing_tts_enabled"] is False
+    assert data["incoming_tts_enabled"] is True
+    assert data["tts_speed"] == 1.2
+    assert data["peer_auto_detect"] is True
+
+    # Restore backend to nllb so singleton isn't left on argos
+    client.post("/prefs", json={"translator_backend": "nllb"})
+
+    vad = StreamingVAD()
+    vad.configure(energy_threshold=500.0, silence_ms=900)
+    assert vad.energy_threshold == 500.0
+    assert vad.silence_frames_limit == 45
+
+
 def test_websocket_test_text_roundtrip(monkeypatch):
     def fake_process_text(text, channel, src_lang, dst_lang, tts_enabled=True):
         return TranslationOutput(

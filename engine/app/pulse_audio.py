@@ -167,6 +167,13 @@ class BridgeConfig:
     mode: str = "vad"
     bypass: bool = False
     ducking_level: float = 0.18
+    outgoing_tts_enabled: bool = True
+    incoming_tts_enabled: bool = True
+    tts_speed: float = 1.0
+    vad_energy_threshold: float = 350.0
+    vad_silence_ms: int = 750
+    peer_auto_detect: bool = False
+    translator_backend: str = "nllb"
 
 
 class PulseCallBridge:
@@ -251,6 +258,33 @@ class PulseCallBridge:
                 self._bypass_out_buf.clear()
         if "ducking_level" in patch:
             self.config.ducking_level = max(0.0, min(1.0, float(patch["ducking_level"])))
+        if "tts_enabled" in patch:
+            both = bool(patch["tts_enabled"])
+            self.config.outgoing_tts_enabled = both
+            self.config.incoming_tts_enabled = both
+        if "outgoing_tts_enabled" in patch:
+            self.config.outgoing_tts_enabled = bool(patch["outgoing_tts_enabled"])
+        if "incoming_tts_enabled" in patch:
+            self.config.incoming_tts_enabled = bool(patch["incoming_tts_enabled"])
+        if "tts_speed" in patch:
+            self.config.tts_speed = max(0.5, min(2.0, float(patch["tts_speed"])))
+        if "vad_energy_threshold" in patch:
+            val = max(80.0, min(2000.0, float(patch["vad_energy_threshold"])))
+            self.config.vad_energy_threshold = val
+            self._out_vad.configure(energy_threshold=val)
+            self._in_vad.configure(energy_threshold=val)
+        if "vad_silence_ms" in patch:
+            ms = max(250, min(3000, int(patch["vad_silence_ms"])))
+            self.config.vad_silence_ms = ms
+            self._out_vad.configure(silence_ms=ms)
+            self._in_vad.configure(silence_ms=ms)
+        if "peer_auto_detect" in patch:
+            self.config.peer_auto_detect = bool(patch["peer_auto_detect"])
+        if "translator_backend" in patch:
+            backend = str(patch["translator_backend"]).lower()
+            if backend in ("nllb", "argos"):
+                self.config.translator_backend = backend
+                self.engine.translator.set_backend(backend)
 
     def set_ptt(self, pressed: bool) -> None:
         if not self.running:
@@ -267,8 +301,20 @@ class PulseCallBridge:
         src = self.config.my_lang if channel == "outgoing" else self.config.peer_lang
         dst = self.config.peer_lang if channel == "outgoing" else self.config.my_lang
         voice_id = self.config.outgoing_voice if channel == "outgoing" else self.config.incoming_voice
+        tts_on = (
+            self.config.outgoing_tts_enabled
+            if channel == "outgoing"
+            else self.config.incoming_tts_enabled
+        )
         out = await asyncio.to_thread(
-            self.engine.process_text, text, channel, src, dst, True, voice_id
+            self.engine.process_text,
+            text,
+            channel,
+            src,
+            dst,
+            tts_on,
+            voice_id,
+            self.config.tts_speed,
         )
         if out is not None:
             await self._deliver_output(out)
@@ -553,12 +599,26 @@ class PulseCallBridge:
                 next_t = time.perf_counter()
 
     async def _process_utterance(self, audio_f32: np.ndarray, channel: str) -> None:
-        src = self.config.my_lang if channel == "outgoing" else self.config.peer_lang
-        dst = self.config.peer_lang if channel == "outgoing" else self.config.my_lang
-        voice_id = self.config.outgoing_voice if channel == "outgoing" else self.config.incoming_voice
+        if channel == "outgoing":
+            src = self.config.my_lang
+            dst = self.config.peer_lang
+            voice_id = self.config.outgoing_voice
+            tts_on = self.config.outgoing_tts_enabled
+        else:
+            src = "auto" if self.config.peer_auto_detect else self.config.peer_lang
+            dst = self.config.my_lang
+            voice_id = self.config.incoming_voice
+            tts_on = self.config.incoming_tts_enabled
         try:
             out = await asyncio.to_thread(
-                self.engine.process_audio, audio_f32, channel, src, dst, True, voice_id
+                self.engine.process_audio,
+                audio_f32,
+                channel,
+                src,
+                dst,
+                tts_on,
+                voice_id,
+                self.config.tts_speed,
             )
             if out is not None:
                 await self._deliver_output(out)

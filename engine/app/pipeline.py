@@ -135,6 +135,7 @@ class TranslationEngine:
         dst_lang: str,
         tts_enabled: bool = True,
         voice_id: str | None = None,
+        tts_speed: float = 1.0,
     ) -> TranslationOutput | None:
         t0 = time.perf_counter()
         stt_res = self.stt.transcribe(audio_f32, src_lang=src_lang, channel=channel)
@@ -152,6 +153,7 @@ class TranslationEngine:
             t0=t0,
             stt_ms=stt_ms,
             voice_id=voice_id,
+            tts_speed=tts_speed,
         )
 
     def process_text(
@@ -162,6 +164,7 @@ class TranslationEngine:
         dst_lang: str,
         tts_enabled: bool = True,
         voice_id: str | None = None,
+        tts_speed: float = 1.0,
     ) -> TranslationOutput | None:
         clean = text.strip()
         if not clean:
@@ -176,6 +179,7 @@ class TranslationEngine:
             t0=time.perf_counter(),
             stt_ms=0,
             voice_id=voice_id,
+            tts_speed=tts_speed,
         )
 
     def _translate_and_synthesize(
@@ -188,6 +192,7 @@ class TranslationEngine:
         t0: float,
         stt_ms: int,
         voice_id: str | None = None,
+        tts_speed: float = 1.0,
     ) -> TranslationOutput:
         mt_t0 = time.perf_counter()
         normalized = normalize_spoken_text(text, src_lang)
@@ -201,7 +206,9 @@ class TranslationEngine:
 
         if tts_enabled and translated:
             if self.tts.has_catalog_voice(dst_lang):
-                audio = self.tts.synthesize(translated, lang=dst_lang, voice_id=voice_id)
+                audio = self.tts.synthesize(
+                    translated, lang=dst_lang, voice_id=voice_id, speed=tts_speed
+                )
                 if audio is not None:
                     tts_pcm16 = audio.pcm16_bytes
                     tts_sr = audio.sample_rate

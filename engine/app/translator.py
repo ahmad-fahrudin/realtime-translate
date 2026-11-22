@@ -217,9 +217,18 @@ class HybridTranslator:
     def __init__(self) -> None:
         self.nllb = NLLBTranslator()
         self.argos = ArgosTranslator()
-        self.active_backend: str = (
+        self.preferred_backend: str = (
             "nllb" if settings.translator_backend.lower() == "nllb" else "argos"
         )
+        self.active_backend: str = self.preferred_backend
+
+    def set_backend(self, backend: str) -> str:
+        clean = backend.strip().lower()
+        if clean not in ("nllb", "argos"):
+            raise ValueError(f"Backend terjemahan tidak dikenal: {backend}")
+        self.preferred_backend = clean
+        self.active_backend = clean
+        return self.active_backend
 
     @property
     def active_device(self) -> str:
@@ -236,7 +245,7 @@ class HybridTranslator:
     def ensure_language_pair(self, src: str, dst: str) -> bool:
         if src == dst:
             return True
-        if settings.translator_backend.lower() == "nllb" and self.nllb.supports_pair(src, dst):
+        if self.preferred_backend == "nllb" and self.nllb.supports_pair(src, dst):
             try:
                 self.nllb.load()
                 self.active_backend = "nllb"
@@ -244,6 +253,7 @@ class HybridTranslator:
             except Exception as exc:
                 logger.warning("NLLB load failed (%s); falling back to Argos", exc)
                 self.active_backend = "argos"
+        self.active_backend = "argos"
         return self.argos.ensure_language_pair(src, dst)
 
     def translate(self, text: str, src_lang: str, dst_lang: str) -> str:
@@ -251,9 +261,7 @@ class HybridTranslator:
         if not clean or src_lang == dst_lang:
             return clean
 
-        if settings.translator_backend.lower() == "nllb" and self.nllb.supports_pair(
-            src_lang, dst_lang
-        ):
+        if self.preferred_backend == "nllb" and self.nllb.supports_pair(src_lang, dst_lang):
             try:
                 out = self.nllb.translate(clean, src_lang=src_lang, dst_lang=dst_lang)
                 self.active_backend = "nllb"
@@ -263,4 +271,5 @@ class HybridTranslator:
                 logger.warning("NLLB translate failed (%s); falling back to Argos", exc)
                 self.active_backend = "argos"
 
+        self.active_backend = "argos"
         return self.argos.translate(clean, src_lang=src_lang, dst_lang=dst_lang)
