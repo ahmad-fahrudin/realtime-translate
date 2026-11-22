@@ -223,12 +223,8 @@ class PiperTTS:
             syn_cfg = None
 
         chunks: list[bytes] = []
-        if hasattr(voice, "synthesize_stream_raw"):
-            for raw in voice.synthesize_stream_raw(clean):
-                chunks.append(raw)
-        else:
-            for audio_chunk in voice.synthesize(clean, syn_config=syn_cfg):
-                chunks.append(audio_chunk.audio_int16_bytes)
+        for audio_chunk in voice.synthesize(clean, syn_config=syn_cfg):
+            chunks.append(audio_chunk.audio_int16_bytes)
 
         pcm = b"".join(chunks)
         if not pcm:

@@ -28,7 +28,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
 COPY app ./app
-COPY scripts ./scripts
 COPY tests ./tests
 
 RUN mkdir -p /models/piper /models/argos /models/huggingface /models/xdg_data /models/xdg_cache

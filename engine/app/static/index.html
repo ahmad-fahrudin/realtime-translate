@@ -192,9 +192,27 @@
                   <div class="field">
                     <div class="field-head">
                       <label for="vadThresholdSlider">Sensitivitas Mic / VAD</label>
-                      <span id="vadThresholdVal" class="range-val">350</span>
+                      <div class="controls-group">
+                        <span id="micRmsVal" class="range-val muted-val">RMS 0</span>
+                        <span id="vadThresholdVal" class="range-val">350</span>
+                      </div>
                     </div>
-                    <input id="vadThresholdSlider" type="range" min="150" max="900" step="25" value="350" />
+                    <div class="rms-meter" aria-hidden="true">
+                      <div id="micRmsFill" class="rms-fill"></div>
+                      <div id="vadThreshMark" class="rms-mark"></div>
+                    </div>
+                    <div class="vad-calib-row">
+                      <input id="vadThresholdSlider" type="range" min="150" max="900" step="25" value="350" />
+                      <button id="measureNoiseBtn" type="button" class="btn-sm" title="Ukur kebisingan ruangan 1 detik">Ukur</button>
+                    </div>
+                  </div>
+                  <div class="field">
+                    <label for="vadAggSelect">Filter Kebisingan (VAD)</label>
+                    <select id="vadAggSelect">
+                      <option value="2">Standar</option>
+                      <option value="3">Ketat (Ruangan Bising)</option>
+                      <option value="1">Sensitif (Ruangan Tenang)</option>
+                    </select>
                   </div>
                   <div class="field">
                     <div class="field-head">
@@ -220,7 +238,7 @@
                 <option value="ptt">Push-to-Talk</option>
               </select>
             </div>
-            <button id="pttBtn" class="ptt-btn" type="button" hidden>Tahan untuk Bicara</button>
+            <button id="pttBtn" class="ptt-btn" type="button" hidden>Tahan untuk Bicara (Spasi)</button>
             <div class="footer-row footer-meta">
               <label class="toggle-chip">
                 <input id="bypassChk" type="checkbox" />
@@ -237,11 +255,27 @@
 
         <section class="transcript-panel" aria-label="Transkrip Langsung dan Testing">
           <div class="panel-head">
-            <span class="section-title">Transkrip Langsung</span>
-            <span id="hintMsg" class="status-pill hint-pill"></span>
+            <div class="panel-head-left">
+              <span class="section-title">Transkrip Langsung</span>
+              <span id="hintMsg" class="status-pill hint-pill"></span>
+            </div>
+            <div class="controls-group">
+              <input
+                id="historySearch"
+                class="search-input"
+                type="search"
+                placeholder="Cari transkrip..."
+                aria-label="Cari transkrip"
+              />
+              <button id="exportBtn" type="button" class="btn-sm">Ekspor</button>
+              <button id="clearHistoryBtn" type="button" class="btn-sm">Bersihkan</button>
+            </div>
           </div>
 
-          <div id="feed" class="transcript-feed"></div>
+          <div class="feed-wrap">
+            <div id="feed" class="transcript-feed"></div>
+            <button id="jumpLatestBtn" class="jump-latest" type="button" hidden>Pesan baru ↓</button>
+          </div>
 
           <div class="test-bar">
             <div class="test-row">

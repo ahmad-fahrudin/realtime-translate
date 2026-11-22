@@ -2,7 +2,6 @@ import logging
 from pathlib import Path
 import re
 import threading
-import time
 import argostranslate.package
 import argostranslate.translate
 import ctranslate2

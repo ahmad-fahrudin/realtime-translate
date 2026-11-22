@@ -23,6 +23,7 @@ let savedPrefs = {
   tts_speed: 1.0,
   vad_energy_threshold: 350,
   vad_silence_ms: 750,
+  vad_aggressiveness: 2,
   peer_auto_detect: false,
   translator_backend: "nllb",
 };
@@ -182,15 +183,67 @@ function getConfig() {
     tts_speed: Number(el("ttsSpeedSlider").value) / 100,
     vad_energy_threshold: Number(el("vadThresholdSlider").value),
     vad_silence_ms: Number(el("vadSilenceSlider").value),
+    vad_aggressiveness: Number(el("vadAggSelect").value),
     peer_auto_detect: el("peerAutoLangChk").checked,
     translator_backend: el("translatorBackendSelect").value,
   };
 }
 
-function appendFeed(item) {
+function isFeedNearBottom() {
+  const feed = el("feed");
+  return feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+}
+
+function updateThreshMarker() {
+  const mark = el("vadThreshMark");
+  if (!mark) return;
+  const val = Number(el("vadThresholdSlider").value);
+  const pct = Math.max(0, Math.min(100, (val / 950) * 100));
+  mark.style.left = `${pct}%`;
+}
+
+function setMicMeter(rms) {
+  const fill = el("micRmsFill");
+  const valEl = el("micRmsVal");
+  if (!fill || !valEl) return;
+  const clean = Math.max(0, Number(rms) || 0);
+  const pct = Math.max(0, Math.min(100, (clean / 950) * 100));
+  const thresh = Number(el("vadThresholdSlider").value) || 350;
+  fill.style.width = `${pct}%`;
+  fill.classList.toggle("is-hot", clean >= thresh);
+  valEl.textContent = `RMS ${Math.round(clean)}`;
+}
+
+function setPendingBubble(channel, active) {
+  const feed = el("feed");
+  const existing = feed.querySelector(`.msg-pending[data-channel="${channel}"]`);
+  if (!active) {
+    if (existing) existing.remove();
+    return;
+  }
+  if (existing) return;
+  const nearBottom = isFeedNearBottom();
+  const out = channel === "outgoing";
+  const div = document.createElement("div");
+  div.className = `msg msg-pending ${out ? "msg-out" : "msg-in"}`;
+  div.dataset.channel = channel;
+  div.innerHTML = `
+    <div class="bubble">
+      <span class="typing-dots"><span></span><span></span><span></span></span>
+      <span>Menerjemahkan...</span>
+    </div>
+  `;
+  feed.appendChild(div);
+  if (nearBottom || out) feed.scrollTop = feed.scrollHeight;
+}
+
+function appendFeed(item, opts = {}) {
+  const shouldScroll = opts.scroll !== false;
   const feed = el("feed");
   const out = item.channel === "outgoing";
-  const nearBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+  const nearBottom = isFeedNearBottom();
+  setPendingBubble(item.channel, false);
+
   const div = document.createElement("article");
   div.className = `msg ${out ? "msg-out" : "msg-in"}`;
   const tag = out ? "Anda" : "Lawan Bicara";
@@ -199,9 +252,14 @@ function appendFeed(item) {
   const timing = hasStages
     ? `${item.latency_ms} ms · STT ${item.stt_ms || 0} · MT ${item.mt_ms} · TTS ${item.tts_ms || 0}`
     : `${item.latency_ms} ms`;
-  const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const dt = item.ts_ms ? new Date(item.ts_ms) : new Date();
+  const time = dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   div.innerHTML = `
-    <div class="msg-meta"><span class="msg-who"></span><span class="msg-time"></span></div>
+    <div class="msg-meta">
+      <span class="msg-who"></span>
+      <span class="msg-time"></span>
+      <button type="button" class="copy-btn">Salin</button>
+    </div>
     <div class="bubble">
       <div class="feed-dst"></div>
       <div class="feed-src"></div>
@@ -213,8 +271,31 @@ function appendFeed(item) {
   div.querySelector(".feed-src").textContent = item.source_text;
   div.querySelector(".feed-dst").textContent = item.translated_text;
   div.querySelector(".msg-foot").textContent = `${timing}${warn}`;
+
+  const copyBtn = div.querySelector(".copy-btn");
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(item.translated_text || "");
+      copyBtn.textContent = "Tersalin";
+      copyBtn.classList.add("is-copied");
+      setTimeout(() => {
+        copyBtn.textContent = "Salin";
+        copyBtn.classList.remove("is-copied");
+      }, 1500);
+    } catch {
+      /* ignore clipboard error */
+    }
+  });
+
   feed.appendChild(div);
-  if (nearBottom || out) feed.scrollTop = feed.scrollHeight;
+  if (shouldScroll) {
+    if (nearBottom || out) {
+      feed.scrollTop = feed.scrollHeight;
+      el("jumpLatestBtn").hidden = true;
+    } else {
+      el("jumpLatestBtn").hidden = false;
+    }
+  }
 }
 
 function sendWs(payload) {
@@ -239,15 +320,9 @@ const LOCKABLE_CONTROL_IDS = [
   "vspkSelect",
   "hpSelect",
   "modeSelect",
-  "outgoingTtsChk",
-  "incomingTtsChk",
   "bypassChk",
-  "duckSlider",
   "translatorBackendSelect",
-  "ttsSpeedSlider",
-  "vadThresholdSlider",
-  "vadSilenceSlider",
-  "peerAutoLangChk",
+  "measureNoiseBtn",
   "testInput",
   "testOutBtn",
   "testInBtn",
@@ -258,9 +333,8 @@ function setControlsLocked(locked) {
     const node = el(id);
     if (node) node.disabled = locked;
   }
-  document.querySelectorAll(".toggle-chip, .inline-toggle").forEach((chip) => {
-    chip.classList.toggle("is-disabled", locked);
-  });
+  const bypassWrap = el("bypassChk")?.closest(".toggle-chip");
+  if (bypassWrap) bypassWrap.classList.toggle("is-disabled", locked);
   if (!locked) {
     syncWhisperApplyBtn();
   }
@@ -272,6 +346,12 @@ function setRunningState(running) {
   btn.disabled = false;
   btn.textContent = running ? "Hentikan Translasi" : "Mulai Translasi";
   btn.className = running ? "danger" : "primary";
+  if (!running) {
+    setMicMeter(0);
+    setPendingBubble("outgoing", false);
+    setPendingBubble("incoming", false);
+    setPttState(false);
+  }
   setControlsLocked(running);
 }
 
@@ -316,11 +396,15 @@ function connectControlWs() {
     const msg = JSON.parse(ev.data);
     if (msg.event === "status") {
       setRunningState(Boolean(msg.running));
-    } else if (msg.event === "devices") {
-      applyDevices(msg);
     } else if (msg.event === "vad") {
       const dot = msg.channel === "outgoing" ? el("micVadDot") : el("peerVadDot");
       dot.className = msg.active ? "dot active" : "dot";
+    } else if (msg.event === "audio_level") {
+      if (msg.channel === "outgoing") {
+        setMicMeter(msg.rms);
+      }
+    } else if (msg.event === "processing") {
+      setPendingBubble(msg.channel, Boolean(msg.active));
     } else if (msg.event === "translation") {
       appendFeed(msg);
     } else if (msg.event === "download_progress") {
@@ -373,10 +457,15 @@ function applySavedControls(prefs) {
   const vadTh = Number(prefs.vad_energy_threshold ?? 350);
   el("vadThresholdSlider").value = String(vadTh);
   el("vadThresholdVal").textContent = String(vadTh);
+  updateThreshMarker();
 
   const vadSil = Number(prefs.vad_silence_ms ?? 750);
   el("vadSilenceSlider").value = String(vadSil);
   el("vadSilenceVal").textContent = `${vadSil} ms`;
+
+  if (prefs.vad_aggressiveness !== undefined) {
+    el("vadAggSelect").value = String(prefs.vad_aggressiveness);
+  }
 
   el("peerAutoLangChk").checked = Boolean(prefs.peer_auto_detect);
   if (prefs.translator_backend) {
@@ -413,6 +502,22 @@ function schedulePersistPrefs() {
   prefsSaveTimer = setTimeout(persistPrefsNow, 150);
 }
 
+async function loadHistory(query = "") {
+  const url = query
+    ? `/history?limit=200&q=${encodeURIComponent(query)}`
+    : "/history?limit=200";
+  const res = await fetch(url).then((r) => r.json()).catch(() => null);
+  const feed = el("feed");
+  feed.innerHTML = "";
+  el("jumpLatestBtn").hidden = true;
+  if (res && Array.isArray(res.items)) {
+    for (const item of res.items) {
+      appendFeed(item, { scroll: false });
+    }
+    feed.scrollTop = feed.scrollHeight;
+  }
+}
+
 async function init() {
   const [langRes, devRes, healthRes, whisperRes, voicesRes, prefsRes] = await Promise.all([
     fetch("/languages").then((r) => r.json()),
@@ -428,9 +533,6 @@ async function init() {
     activeTranslatorBackend = healthRes.translator_backend || activeTranslatorBackend;
     const dev = healthRes.whisper_device || "cpu";
     engineLabel = `Ready · ${activeWhisperModel} (${dev}) · ${activeTranslatorBackend}`;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      el("engineStatus").textContent = engineLabel;
-    }
   }
   if (voicesRes && voicesRes.voices) {
     voicesByLang = voicesRes.voices;
@@ -439,6 +541,7 @@ async function init() {
   refreshVoiceSelects(true);
   populateWhisperModels(whisperRes);
   applyDevices(devRes);
+  await loadHistory();
   connectControlWs();
 }
 
@@ -598,6 +701,11 @@ let pttActive = false;
 function setPttState(pressed) {
   if (pttActive === pressed) return;
   pttActive = pressed;
+  const btn = el("pttBtn");
+  if (btn) {
+    btn.classList.toggle("is-pressing", pressed);
+    btn.textContent = pressed ? "Sedang Merekam..." : "Tahan untuk Bicara (Spasi)";
+  }
   sendWs({ cmd: "ptt", pressed });
 }
 el("pttBtn").addEventListener("mousedown", () => setPttState(true));
@@ -609,11 +717,34 @@ el("pttBtn").addEventListener("touchstart", (e) => {
 });
 el("pttBtn").addEventListener("touchend", () => setPttState(false));
 
+function isEditableTarget(target) {
+  if (!target) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+}
+
+window.addEventListener("keydown", (e) => {
+  if (e.code !== "Space" || e.repeat) return;
+  if (!isRunning || el("modeSelect").value !== "ptt" || isEditableTarget(e.target)) return;
+  e.preventDefault();
+  setPttState(true);
+});
+
+window.addEventListener("keyup", (e) => {
+  if (e.code !== "Space" || !pttActive) return;
+  e.preventDefault();
+  setPttState(false);
+});
+
+window.addEventListener("blur", () => {
+  if (pttActive) setPttState(false);
+});
+
 ["micSelect", "vmicSelect", "vspkSelect", "hpSelect"].forEach((id) => {
   el(id).addEventListener("change", persistPrefsNow);
 });
 
-["bypassChk", "outgoingTtsChk", "incomingTtsChk", "peerAutoLangChk", "translatorBackendSelect"].forEach((id) => {
+["bypassChk", "outgoingTtsChk", "incomingTtsChk", "peerAutoLangChk", "translatorBackendSelect", "vadAggSelect"].forEach((id) => {
   el(id).addEventListener("change", () => {
     syncTtsLabels();
     persistPrefsNow();
@@ -629,14 +760,91 @@ el("duckSlider").addEventListener("input", () => {
 el("ttsSpeedSlider").addEventListener("input", () => {
   el("ttsSpeedVal").textContent = `${(Number(el("ttsSpeedSlider").value) / 100).toFixed(2)}x`;
   schedulePersistPrefs();
+  if (isRunning) sendWs({ cmd: "update_config", config: getConfig() });
 });
 el("vadThresholdSlider").addEventListener("input", () => {
   el("vadThresholdVal").textContent = el("vadThresholdSlider").value;
+  updateThreshMarker();
   schedulePersistPrefs();
+  if (isRunning) sendWs({ cmd: "update_config", config: getConfig() });
 });
 el("vadSilenceSlider").addEventListener("input", () => {
   el("vadSilenceVal").textContent = `${el("vadSilenceSlider").value} ms`;
   schedulePersistPrefs();
+  if (isRunning) sendWs({ cmd: "update_config", config: getConfig() });
+});
+
+el("measureNoiseBtn").addEventListener("click", async () => {
+  const btn = el("measureNoiseBtn");
+  btn.disabled = true;
+  btn.textContent = "Mengukur...";
+  try {
+    const resp = await fetch("/audio/measure-noise", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mic_source: el("micSelect").value }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) {
+      throw new Error(data.detail || data.error || "Gagal mengukur kebisingan");
+    }
+    setMicMeter(data.rms_avg);
+    el("vadThresholdSlider").value = String(data.suggested_threshold);
+    el("vadThresholdVal").textContent = String(data.suggested_threshold);
+    updateThreshMarker();
+    persistPrefsNow();
+    el("hintMsg").textContent = `Kebisingan RMS ${data.rms_avg} · Threshold disetel ke ${data.suggested_threshold}`;
+  } catch (err) {
+    el("hintMsg").textContent = err.message;
+  } finally {
+    btn.disabled = isRunning;
+    btn.textContent = "Ukur";
+  }
+});
+
+let searchTimer = null;
+el("historySearch").addEventListener("input", () => {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => loadHistory(el("historySearch").value.trim()), 180);
+});
+
+el("exportBtn").addEventListener("click", () => {
+  const q = el("historySearch").value.trim();
+  const url = q
+    ? `/history/export?q=${encodeURIComponent(q)}`
+    : "/history/export";
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "transkrip.txt";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+});
+
+el("clearHistoryBtn").addEventListener("click", async () => {
+  if (!confirm("Bersihkan seluruh riwayat transkrip?")) return;
+  await fetch("/history", { method: "DELETE" }).catch(() => { });
+  el("feed").innerHTML = "";
+  el("jumpLatestBtn").hidden = true;
+});
+
+el("feed").addEventListener("scroll", () => {
+  if (isFeedNearBottom()) {
+    el("jumpLatestBtn").hidden = true;
+  }
+});
+
+el("jumpLatestBtn").addEventListener("click", () => {
+  const feed = el("feed");
+  feed.scrollTop = feed.scrollHeight;
+  el("jumpLatestBtn").hidden = true;
+});
+
+el("testInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    el("testOutBtn").click();
+  }
 });
 
 ["myLang", "peerLang"].forEach((id) => {

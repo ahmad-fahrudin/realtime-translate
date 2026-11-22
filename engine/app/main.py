@@ -8,14 +8,20 @@ import time
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import PIPER_VOICE_CATALOG, SUPPORTED_LANGUAGES, WHISPER_MODEL_CATALOG, settings
 from .downloader import DownloadCancelled, format_mb
+from .history import HistoryStore
 from .pipeline import TranslationEngine, TranslationOutput
-from .pulse_audio import PulseCallBridge, list_pulse_devices, setup_virtual_audio
+from .pulse_audio import (
+    PulseCallBridge,
+    list_pulse_devices,
+    measure_ambient_noise,
+    setup_virtual_audio,
+)
 from .vad import StreamingVAD
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
@@ -24,11 +30,16 @@ logger = logging.getLogger("rt-engine")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 engine = TranslationEngine()
+history_store = HistoryStore(Path(settings.models_dir) / "history.db")
 control_clients: set[WebSocket] = set()
 control_lock = asyncio.Lock()
 
 
 async def broadcast_control(payload: dict[str, Any]) -> None:
+    if payload.get("event") == "translation":
+        saved = history_store.add(payload)
+        payload["ts_ms"] = saved["ts_ms"]
+        payload["created_at"] = saved["created_at"]
     text = json.dumps(payload)
     async with control_lock:
         clients = list(control_clients)
@@ -138,11 +149,6 @@ class WhisperModelRequest(BaseModel):
     model: str
 
 
-class VoicePrefsRequest(BaseModel):
-    outgoing_voice: str = "auto"
-    incoming_voice: str = "auto"
-
-
 _DEFAULT_UI_PREFS: dict[str, Any] = {
     "my_lang": "id",
     "peer_lang": "en",
@@ -160,6 +166,7 @@ _DEFAULT_UI_PREFS: dict[str, Any] = {
     "tts_speed": 1.0,
     "vad_energy_threshold": settings.vad_energy_threshold,
     "vad_silence_ms": settings.vad_silence_ms,
+    "vad_aggressiveness": settings.vad_aggressiveness,
     "peer_auto_detect": False,
     "translator_backend": settings.translator_backend,
 }
@@ -169,19 +176,12 @@ def _ui_prefs_path() -> Path:
     return Path(settings.models_dir) / "ui_prefs.json"
 
 
-def _voice_prefs_path() -> Path:
-    return Path(settings.models_dir) / "voice_prefs.json"
-
-
 def _load_ui_prefs() -> dict[str, Any]:
     prefs = dict(_DEFAULT_UI_PREFS)
-    # Migrate legacy voice_prefs.json if ui_prefs.json doesn't exist yet
-    legacy = _voice_prefs_path()
     path = _ui_prefs_path()
-    source = path if path.exists() else (legacy if legacy.exists() else None)
-    if source is not None:
+    if path.exists():
         try:
-            raw = json.loads(source.read_text(encoding="utf-8"))
+            raw = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(raw, dict):
                 for key in prefs:
                     if key in raw and raw[key] is not None:
@@ -256,17 +256,6 @@ async def get_voices() -> dict[str, object]:
             "outgoing_voice": prefs["outgoing_voice"],
             "incoming_voice": prefs["incoming_voice"],
         },
-    }
-
-
-@app.post("/voices/prefs")
-async def save_voices_prefs(req: VoicePrefsRequest) -> dict[str, object]:
-    patch = {"outgoing_voice": req.outgoing_voice, "incoming_voice": req.incoming_voice}
-    bridge.update_config(patch)
-    saved = _save_ui_prefs(patch)
-    return {
-        "outgoing_voice": saved["outgoing_voice"],
-        "incoming_voice": saved["incoming_voice"],
     }
 
 
@@ -511,6 +500,38 @@ async def audio_setup_virtual() -> dict[str, object]:
     return await asyncio.to_thread(setup_virtual_audio)
 
 
+@app.post("/audio/measure-noise")
+async def audio_measure_noise(payload: dict[str, Any] | None = None) -> dict[str, object]:
+    if bridge.running:
+        raise HTTPException(
+            status_code=409,
+            detail="Hentikan translasi terlebih dahulu untuk mengukur kebisingan dasar.",
+        )
+    mic = str((payload or {}).get("mic_source") or bridge.config.mic_source or "")
+    return await asyncio.to_thread(measure_ambient_noise, mic)
+
+
+@app.get("/history")
+async def get_history(limit: int = 200, q: str = "") -> dict[str, object]:
+    return {"items": history_store.list_items(limit=limit, query=q)}
+
+
+@app.get("/history/export")
+async def export_history(q: str = "") -> PlainTextResponse:
+    content = history_store.export_text(query=q)
+    return PlainTextResponse(
+        content,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="transkrip.txt"'},
+    )
+
+
+@app.delete("/history")
+async def clear_history() -> dict[str, object]:
+    deleted = history_store.clear()
+    return {"ok": True, "deleted": deleted}
+
+
 @app.websocket("/ws/control")
 async def ws_control(ws: WebSocket) -> None:
     await ws.accept()
@@ -581,6 +602,9 @@ async def _send_output(ws: WebSocket, out: TranslationOutput) -> None:
     }
     if out.tts_warning:
         payload["tts_warning"] = out.tts_warning
+    saved = history_store.add(payload)
+    payload["ts_ms"] = saved["ts_ms"]
+    payload["created_at"] = saved["created_at"]
     await ws.send_text(json.dumps(payload))
 
     if out.tts_pcm16 and out.tts_sample_rate:

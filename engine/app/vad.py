@@ -34,15 +34,22 @@ class StreamingVAD:
         max_utterance_ms: int = settings.vad_max_utterance_ms,
         pre_roll_ms: int = settings.vad_pre_roll_ms,
         post_roll_ms: int = settings.vad_post_roll_ms,
+        enable_highpass: bool = True,
     ) -> None:
         self.sample_rate = sample_rate
         self.frame_duration_ms = frame_duration_ms
         self.frame_samples = int(sample_rate * frame_duration_ms / 1000)
         self.frame_bytes = self.frame_samples * 2  # int16
 
-        self.vad = webrtcvad.Vad(aggressiveness)
+        self.aggressiveness = max(0, min(3, int(aggressiveness)))
+        self.vad = webrtcvad.Vad(self.aggressiveness)
         self.energy_threshold = energy_threshold
         self.continue_energy_threshold = min(energy_threshold, continue_energy_threshold)
+        self.enable_highpass = enable_highpass
+        self._hp_alpha = 0.9695  # ~80 Hz 1st-order high-pass @ 16 kHz
+        self._hp_x_prev = 0.0
+        self._hp_y_prev = 0.0
+        self.last_rms: float = 0.0
 
         self.silence_frames_limit = max(1, silence_ms // frame_duration_ms)
         self.min_speech_frames = max(1, min_speech_ms // frame_duration_ms)
@@ -68,12 +75,34 @@ class StreamingVAD:
         if deadline > self._suppress_until:
             self._suppress_until = deadline
 
+    def _apply_highpass(self, frame: bytes) -> bytes:
+        if not self.enable_highpass:
+            return frame
+        samples = np.frombuffer(frame, dtype=np.int16).astype(np.float32)
+        if samples.size == 0:
+            return frame
+        out = np.empty_like(samples)
+        alpha = self._hp_alpha
+        x_prev = self._hp_x_prev
+        y_prev = self._hp_y_prev
+        for i in range(samples.size):
+            x = float(samples[i])
+            y = alpha * (y_prev + x - x_prev)
+            out[i] = y
+            x_prev = x
+            y_prev = y
+        self._hp_x_prev = x_prev
+        self._hp_y_prev = y_prev
+        return np.clip(out, -32768.0, 32767.0).astype(np.int16).tobytes()
+
     def _frame_rms(self, frame: bytes) -> float:
         samples = np.frombuffer(frame, dtype=np.int16)
         return float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
 
     def _is_speech_frame(self, frame: bytes, continuing: bool = False) -> bool:
-        rms = self._frame_rms(frame)
+        filtered = self._apply_highpass(frame)
+        rms = self._frame_rms(filtered)
+        self.last_rms = rms
         if continuing:
             thresh = self.continue_energy_threshold
         else:
@@ -82,12 +111,13 @@ class StreamingVAD:
                 thresh = max(thresh, 700.0)
         if rms < thresh:
             return False
-        return self.vad.is_speech(frame, self.sample_rate)
+        return self.vad.is_speech(filtered, self.sample_rate)
 
     def configure(
         self,
         energy_threshold: float | None = None,
         silence_ms: int | None = None,
+        aggressiveness: int | None = None,
     ) -> None:
         with self._lock:
             if energy_threshold is not None:
@@ -97,6 +127,11 @@ class StreamingVAD:
             if silence_ms is not None:
                 ms = max(250, min(3000, int(silence_ms)))
                 self.silence_frames_limit = max(1, ms // self.frame_duration_ms)
+            if aggressiveness is not None:
+                agg = max(0, min(3, int(aggressiveness)))
+                if agg != self.aggressiveness:
+                    self.aggressiveness = agg
+                    self.vad = webrtcvad.Vad(agg)
 
     def set_mode(self, mode: str) -> None:
         with self._lock:
@@ -122,6 +157,9 @@ class StreamingVAD:
             self._active_speech_frames = 0
             self._speech_active = False
             self._silence_count = 0
+            self._hp_x_prev = 0.0
+            self._hp_y_prev = 0.0
+            self.last_rms = 0.0
             self.ptt_pressed = False
 
     def _collect_utterance(
@@ -180,6 +218,7 @@ class StreamingVAD:
                 del self._raw_buffer[: self.frame_bytes]
 
                 if self.mode == "ptt":
+                    self.last_rms = self._frame_rms(self._apply_highpass(frame))
                     if self.ptt_pressed:
                         self._speech_frames.append(frame)
                         if len(self._speech_frames) >= self.max_utterance_frames:

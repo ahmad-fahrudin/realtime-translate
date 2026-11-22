@@ -1,7 +1,5 @@
 """Host PipeWire/PulseAudio bridge running inside Docker via PULSE_SERVER."""
 
-from __future__ import annotations
-
 import asyncio
 from collections import deque
 from dataclasses import dataclass
@@ -30,13 +28,41 @@ CAPTURE_48K_BYTES = MIXER_BLOCK_SAMPLES * 2  # 1920 bytes @ 48kHz
 MAX_UTTERANCE_QUEUE = 3
 
 
-def resample_linear(samples: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
+def resample_audio(samples: np.ndarray, src_sr: int, dst_sr: int, half_width: int = 4) -> np.ndarray:
+    """Bandlimited Kaiser-windowed sinc resampler (anti-aliased, zero external deps)."""
     if src_sr == dst_sr or samples.size == 0:
-        return samples
-    out_len = max(1, int(round(len(samples) * dst_sr / src_sr)))
-    x_old = np.linspace(0.0, 1.0, len(samples), endpoint=False)
-    x_new = np.linspace(0.0, 1.0, out_len, endpoint=False)
-    return np.interp(x_new, x_old, samples).astype(np.float32)
+        return samples.astype(np.float32, copy=False)
+
+    n_in = len(samples)
+    out_len = max(1, int(round(n_in * dst_sr / src_sr)))
+    cutoff = min(1.0, dst_sr / src_sr)
+    support = half_width / cutoff
+
+    pos = np.arange(out_len, dtype=np.float64) * (src_sr / dst_sr)
+    center = np.floor(pos).astype(np.int64)
+    offsets = np.arange(-int(np.ceil(support)), int(np.ceil(support)) + 1, dtype=np.int64)
+
+    idx = center[:, None] + offsets[None, :]
+    delta = idx - pos[:, None]
+    win_arg = delta / support
+    in_window = np.abs(win_arg) <= 1.0
+    # Kaiser window (beta = 5.0)
+    kaiser = np.where(
+        in_window,
+        np.i0(5.0 * np.sqrt(np.maximum(0.0, 1.0 - win_arg * win_arg))) / np.i0(5.0),
+        0.0,
+    )
+    weights = np.sinc(cutoff * delta) * kaiser
+    row_sums = weights.sum(axis=1, keepdims=True)
+    weights = np.divide(weights, row_sums, out=np.zeros_like(weights), where=row_sums != 0.0)
+
+    clamped_idx = np.clip(idx, 0, n_in - 1)
+    return np.sum(samples[clamped_idx] * weights, axis=1).astype(np.float32)
+
+
+def resample_linear(samples: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
+    """Backwards-compatible alias delegating to bandlimited resample_audio."""
+    return resample_audio(samples, src_sr, dst_sr)
 
 
 def _run_pactl(args: list[str]) -> str:
@@ -172,6 +198,7 @@ class BridgeConfig:
     tts_speed: float = 1.0
     vad_energy_threshold: float = 350.0
     vad_silence_ms: int = 750
+    vad_aggressiveness: int = 2
     peer_auto_detect: bool = False
     translator_backend: str = "nllb"
 
@@ -278,6 +305,11 @@ class PulseCallBridge:
             self.config.vad_silence_ms = ms
             self._out_vad.configure(silence_ms=ms)
             self._in_vad.configure(silence_ms=ms)
+        if "vad_aggressiveness" in patch:
+            agg = max(0, min(3, int(patch["vad_aggressiveness"])))
+            self.config.vad_aggressiveness = agg
+            self._out_vad.configure(aggressiveness=agg)
+            self._in_vad.configure(aggressiveness=agg)
         if "peer_auto_detect" in patch:
             self.config.peer_auto_detect = bool(patch["peer_auto_detect"])
         if "translator_backend" in patch:
@@ -490,18 +522,29 @@ class PulseCallBridge:
         self._procs.append(proc)
         assert proc.stdout is not None
 
+        last_meter_t = 0.0
         while not self._stop_event.is_set():
             chunk = proc.stdout.read(CAPTURE_16K_BYTES)
             if not chunk:
                 break
 
+            now = time.monotonic()
             if self.config.bypass:
                 f32 = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
-                up = resample_linear(f32, ENGINE_SR, VMIC_SR)
+                if now - last_meter_t >= 0.09:
+                    last_meter_t = now
+                    rms = float(np.sqrt(np.mean((f32 * 32768.0) ** 2)))
+                    self._emit_threadsafe({"event": "audio_level", "channel": "outgoing", "rms": round(rms, 1)})
+                up = resample_audio(f32, ENGINE_SR, VMIC_SR)
                 self._bypass_out_buf.push(up)
                 continue
 
             results = self._out_vad.feed(chunk)
+            if now - last_meter_t >= 0.09:
+                last_meter_t = now
+                self._emit_threadsafe(
+                    {"event": "audio_level", "channel": "outgoing", "rms": round(self._out_vad.last_rms, 1)}
+                )
             for res in results:
                 if res.speech_state_changed:
                     self._emit_threadsafe(
@@ -526,6 +569,7 @@ class PulseCallBridge:
         self._procs.append(proc)
         assert proc.stdout is not None
 
+        last_meter_t = 0.0
         while not self._stop_event.is_set():
             chunk = proc.stdout.read(CAPTURE_48K_BYTES)
             if not chunk:
@@ -545,6 +589,12 @@ class PulseCallBridge:
             pcm16_16k = np.clip(f32_16k * 32767.0, -32768, 32767).astype(np.int16).tobytes()
 
             results = self._in_vad.feed(pcm16_16k)
+            now = time.monotonic()
+            if now - last_meter_t >= 0.09:
+                last_meter_t = now
+                self._emit_threadsafe(
+                    {"event": "audio_level", "channel": "incoming", "rms": round(self._in_vad.last_rms, 1)}
+                )
             for res in results:
                 if res.speech_state_changed:
                     self._emit_threadsafe(
@@ -609,6 +659,7 @@ class PulseCallBridge:
             dst = self.config.my_lang
             voice_id = self.config.incoming_voice
             tts_on = self.config.incoming_tts_enabled
+        await self.on_event({"event": "processing", "channel": channel, "active": True})
         try:
             out = await asyncio.to_thread(
                 self.engine.process_audio,
@@ -625,6 +676,8 @@ class PulseCallBridge:
         except Exception as exc:
             logger.exception("Bridge pipeline error (%s)", channel)
             await self.on_event({"event": "error", "message": str(exc)})
+        finally:
+            await self.on_event({"event": "processing", "channel": channel, "active": False})
 
     async def _deliver_output(self, out: TranslationOutput) -> None:
         payload: dict[str, Any] = {
@@ -648,9 +701,58 @@ class PulseCallBridge:
         if out.tts_pcm16 and out.tts_sample_rate:
             f32 = np.frombuffer(out.tts_pcm16, dtype=np.int16).astype(np.float32) / 32768.0
             if out.channel == "outgoing":
-                resampled = resample_linear(f32, out.tts_sample_rate, VMIC_SR)
+                resampled = resample_audio(f32, out.tts_sample_rate, VMIC_SR)
                 self._tts_out_buf.push(resampled)
             else:
-                resampled = resample_linear(f32, out.tts_sample_rate, MIXER_SR)
+                resampled = resample_audio(f32, out.tts_sample_rate, MIXER_SR)
                 self._tts_in_buf.push(resampled)
+
+
+def measure_ambient_noise(mic_source: str, duration_sec: float = 1.0) -> dict[str, Any]:
+    """Sample ambient mic RMS for ~1s and suggest an energy threshold above background noise."""
+    if not mic_source:
+        return {"ok": False, "error": "Mikrofon fisik belum dipilih."}
+    proc = subprocess.Popen(
+        [
+            "parec",
+            f"--device={mic_source}",
+            f"--rate={ENGINE_SR}",
+            "--channels=1",
+            "--format=s16le",
+            "--latency-msec=20",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    assert proc.stdout is not None
+    rms_values: list[float] = []
+    target_frames = max(10, int(duration_sec * 1000 / BLOCK_MS))
+    probe_vad = StreamingVAD(enable_highpass=True)
+    try:
+        for _ in range(target_frames):
+            chunk = proc.stdout.read(CAPTURE_16K_BYTES)
+            if not chunk or len(chunk) < CAPTURE_16K_BYTES:
+                break
+            filtered = probe_vad._apply_highpass(chunk)
+            rms_values.append(probe_vad._frame_rms(filtered))
+    finally:
+        try:
+            proc.terminate()
+            proc.wait(timeout=1.0)
+        except Exception:
+            proc.kill()
+
+    if not rms_values:
+        return {"ok": False, "error": "Tidak ada data audio dari mikrofon."}
+
+    avg_rms = float(np.mean(rms_values))
+    p90_rms = float(np.percentile(rms_values, 90))
+    raw_suggested = max(150.0, p90_rms * 1.45 + 40.0)
+    suggested = int(min(900, max(150, round(raw_suggested / 25.0) * 25)))
+    return {
+        "ok": True,
+        "rms_avg": round(avg_rms, 1),
+        "rms_p90": round(p90_rms, 1),
+        "suggested_threshold": suggested,
+    }
 
