@@ -1,10 +1,10 @@
 import numpy as np
 from fastapi.testclient import TestClient
 
-from app.history import HistoryStore
+from app.audio.pulse_audio import resample_audio
+from app.audio.vad import StreamingVAD
+from app.core.history import HistoryStore
 from app.main import app
-from app.pulse_audio import resample_audio
-from app.vad import StreamingVAD
 
 
 def test_bandlimited_resampler_preserves_dc_and_smooth_sine():

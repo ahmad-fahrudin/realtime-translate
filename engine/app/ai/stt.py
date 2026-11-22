@@ -12,8 +12,8 @@ from faster_whisper.utils import _MODELS as WHISPER_REPOS
 from huggingface_hub import try_to_load_from_cache
 import numpy as np
 
-from .config import WHISPER_MODEL_CATALOG, settings, whisper_dir
-from .downloader import DownloadCancelled, download_hf_files
+from ..core.config import WHISPER_MODEL_CATALOG, settings, whisper_dir
+from ..core.downloader import DownloadCancelled, download_hf_files
 
 _WHISPER_ALLOW_PATTERNS = [
     "config.json",

@@ -5,7 +5,7 @@ import time
 import numpy as np
 import webrtcvad
 
-from .config import settings
+from ..core.config import settings
 
 
 @dataclass

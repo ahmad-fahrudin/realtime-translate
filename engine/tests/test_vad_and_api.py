@@ -2,10 +2,10 @@ import json
 import numpy as np
 from fastapi.testclient import TestClient
 
+from app.ai.pipeline import TranslationOutput
+from app.audio.pulse_audio import AudioRingBuffer, resample_linear
+from app.audio.vad import StreamingVAD
 from app.main import app, engine
-from app.pipeline import TranslationOutput
-from app.pulse_audio import AudioRingBuffer, resample_linear
-from app.vad import StreamingVAD
 
 
 def test_vad_ptt_collects_and_flushes():
@@ -127,7 +127,7 @@ def test_switch_whisper_model_endpoint(monkeypatch):
 def test_download_cancellation_cleans_temp_file(tmp_path):
     import threading
     import httpx
-    from app.downloader import DownloadCancelled, stream_download_file
+    from app.core.downloader import DownloadCancelled, stream_download_file
 
     cancel_ev = threading.Event()
     cancel_ev.set()
@@ -149,8 +149,8 @@ def test_download_cancellation_cleans_temp_file(tmp_path):
 
 
 def test_whisper_model_selection_persists(tmp_path, monkeypatch):
-    from app.config import settings
-    from app.stt import FasterWhisperSTT
+    from app.ai.stt import FasterWhisperSTT
+    from app.core.config import settings
 
     monkeypatch.setattr(settings, "models_dir", str(tmp_path))
     monkeypatch.setattr(settings, "whisper_model", "small")
@@ -164,8 +164,8 @@ def test_whisper_model_selection_persists(tmp_path, monkeypatch):
 
 
 def test_ui_prefs_roundtrip_and_vad_configure(tmp_path, monkeypatch):
-    from app.config import settings
-    from app.vad import StreamingVAD
+    from app.audio.vad import StreamingVAD
+    from app.core.config import settings
 
     monkeypatch.setattr(settings, "models_dir", str(tmp_path))
 

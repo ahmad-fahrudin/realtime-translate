@@ -5,7 +5,7 @@ from typing import Callable
 import uuid
 import numpy as np
 
-from .downloader import DownloadCancelled
+from ..core.downloader import DownloadCancelled
 from .stt import FasterWhisperSTT
 from .text_norm import normalize_spoken_text
 from .translator import HybridTranslator

@@ -1,8 +1,8 @@
 import numpy as np
 
-from app.stt import _is_hallucination, _prepare_audio
-from app.text_norm import normalize_spoken_text
-from app.vad import StreamingVAD
+from app.ai.stt import _is_hallucination, _prepare_audio
+from app.ai.text_norm import normalize_spoken_text
+from app.audio.vad import StreamingVAD
 
 
 def test_spoken_indonesian_normalizer():
@@ -69,7 +69,7 @@ def test_vad_hysteresis_holds_soft_ending_and_splits_long_speech():
 
 
 def test_tts_voice_resolution_and_pitch_shift():
-    from app.tts import PiperTTS, apply_pitch_shift
+    from app.ai.tts import PiperTTS, apply_pitch_shift
 
     tts = PiperTTS()
     en_male = tts.resolve_voice("en", "male")

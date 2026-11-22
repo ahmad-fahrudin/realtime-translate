@@ -12,17 +12,17 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .config import PIPER_VOICE_CATALOG, SUPPORTED_LANGUAGES, WHISPER_MODEL_CATALOG, settings
-from .downloader import DownloadCancelled, format_mb
-from .history import HistoryStore
-from .pipeline import TranslationEngine, TranslationOutput
-from .pulse_audio import (
+from .ai.pipeline import TranslationEngine, TranslationOutput
+from .audio.pulse_audio import (
     PulseCallBridge,
     list_pulse_devices,
     measure_ambient_noise,
     setup_virtual_audio,
 )
-from .vad import StreamingVAD
+from .audio.vad import StreamingVAD
+from .core.config import PIPER_VOICE_CATALOG, SUPPORTED_LANGUAGES, WHISPER_MODEL_CATALOG, settings
+from .core.downloader import DownloadCancelled, format_mb
+from .core.history import HistoryStore
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
 logger = logging.getLogger("rt-engine")

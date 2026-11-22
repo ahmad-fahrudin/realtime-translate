@@ -8,7 +8,7 @@ import ctranslate2
 from huggingface_hub import snapshot_download
 from tokenizers import Tokenizer
 
-from .config import NLLB_LANG_CODES, nllb_dir, settings
+from ..core.config import NLLB_LANG_CODES, nllb_dir, settings
 
 logger = logging.getLogger("rt-translator")
 

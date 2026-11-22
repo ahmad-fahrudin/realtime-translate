@@ -12,7 +12,7 @@ from typing import Any, Awaitable, Callable
 
 import numpy as np
 
-from .pipeline import TranslationEngine, TranslationOutput
+from ..ai.pipeline import TranslationEngine, TranslationOutput
 from .vad import StreamingVAD
 
 logger = logging.getLogger("rt-pulse")

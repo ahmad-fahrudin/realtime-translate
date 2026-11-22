@@ -7,8 +7,8 @@ from typing import Callable
 import httpx
 from piper import PiperVoice, SynthesisConfig
 
-from .config import PIPER_VOICES, piper_dir
-from .downloader import stream_download_file
+from ..core.config import PIPER_VOICES, piper_dir
+from ..core.downloader import stream_download_file
 
 HF_PIPER_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
 logger = logging.getLogger("rt-tts")
