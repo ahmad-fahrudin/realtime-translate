@@ -1,6 +1,7 @@
 from collections import deque
 from dataclasses import dataclass
 import threading
+import time
 import numpy as np
 import webrtcvad
 
@@ -27,6 +28,7 @@ class StreamingVAD:
         frame_duration_ms: int = settings.frame_duration_ms,
         aggressiveness: int = settings.vad_aggressiveness,
         energy_threshold: float = settings.vad_energy_threshold,
+        continue_energy_threshold: float = settings.vad_continue_energy_threshold,
         silence_ms: int = settings.vad_silence_ms,
         min_speech_ms: int = settings.vad_min_speech_ms,
         max_utterance_ms: int = settings.vad_max_utterance_ms,
@@ -40,6 +42,7 @@ class StreamingVAD:
 
         self.vad = webrtcvad.Vad(aggressiveness)
         self.energy_threshold = energy_threshold
+        self.continue_energy_threshold = min(energy_threshold, continue_energy_threshold)
 
         self.silence_frames_limit = max(1, silence_ms // frame_duration_ms)
         self.min_speech_frames = max(1, min_speech_ms // frame_duration_ms)
@@ -54,9 +57,32 @@ class StreamingVAD:
         self._active_speech_frames = 0
         self._speech_active = False
         self._silence_count = 0
+        self._suppress_until = 0.0
 
         self.mode: str = "vad"  # "vad" or "ptt"
         self.ptt_pressed: bool = False
+
+    def suppress_for(self, seconds: float) -> None:
+        """Temporarily raise speech-start energy gate while headphone TTS is playing."""
+        deadline = time.monotonic() + max(0.0, seconds)
+        if deadline > self._suppress_until:
+            self._suppress_until = deadline
+
+    def _frame_rms(self, frame: bytes) -> float:
+        samples = np.frombuffer(frame, dtype=np.int16)
+        return float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
+
+    def _is_speech_frame(self, frame: bytes, continuing: bool = False) -> bool:
+        rms = self._frame_rms(frame)
+        if continuing:
+            thresh = self.continue_energy_threshold
+        else:
+            thresh = self.energy_threshold
+            if time.monotonic() < self._suppress_until:
+                thresh = max(thresh, 700.0)
+        if rms < thresh:
+            return False
+        return self.vad.is_speech(frame, self.sample_rate)
 
     def set_mode(self, mode: str) -> None:
         with self._lock:
@@ -84,18 +110,30 @@ class StreamingVAD:
             self._silence_count = 0
             self.ptt_pressed = False
 
-    def _is_speech_frame(self, frame: bytes) -> bool:
-        samples = np.frombuffer(frame, dtype=np.int16)
-        rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
-        if rms < self.energy_threshold:
-            return False
-        return self.vad.is_speech(frame, self.sample_rate)
-
-    def _collect_utterance(self, trim_trailing_silence: int = 0) -> np.ndarray | None:
+    def _collect_utterance(
+        self,
+        trim_trailing_silence: int = 0,
+        split_on_pause: bool = False,
+    ) -> np.ndarray | None:
         frames = self._speech_frames
         active_count = self._active_speech_frames
-        self._speech_frames = []
-        self._active_speech_frames = 0
+        remainder: list[bytes] = []
+
+        if self.mode != "ptt" and split_on_pause and len(frames) >= 20:
+            # Find the quietest frame in the last ~1.5s to split between words, not mid-word.
+            search_len = min(len(frames) // 2, 75)
+            start_idx = len(frames) - search_len
+            best_idx = min(range(start_idx, len(frames)), key=lambda i: self._frame_rms(frames[i]))
+            if best_idx > 0 and best_idx < len(frames) - 1:
+                remainder = frames[best_idx + 1 :]
+                frames = frames[: best_idx + 1]
+
+        self._speech_frames = remainder
+        self._active_speech_frames = (
+            sum(1 for f in remainder if self._frame_rms(f) >= self.continue_energy_threshold)
+            if remainder
+            else 0
+        )
 
         if self.mode == "ptt":
             if len(frames) < self.min_speech_frames:
@@ -136,7 +174,7 @@ class StreamingVAD:
                                 results.append(VADResult(utterance=utterance))
                     continue
 
-                is_speech = self._is_speech_frame(frame)
+                is_speech = self._is_speech_frame(frame, continuing=self._speech_active)
 
                 if not self._speech_active:
                     self._pre_roll.append(frame)
@@ -164,16 +202,26 @@ class StreamingVAD:
                             if reached_silence
                             else 0
                         )
-                        self._speech_active = False
-                        self._silence_count = 0
-                        utterance = self._collect_utterance(trim_trailing_silence=trim)
-                        results.append(
-                            VADResult(
-                                utterance=utterance,
-                                speech_state_changed=True,
-                                speech_active=False,
-                            )
+                        utterance = self._collect_utterance(
+                            trim_trailing_silence=trim,
+                            split_on_pause=reached_max and not reached_silence,
                         )
+                        if reached_max and not reached_silence and self._speech_frames:
+                            # Continue recording the remainder smoothly without dropping speech
+                            self._speech_active = True
+                            self._silence_count = 0
+                            if utterance is not None:
+                                results.append(VADResult(utterance=utterance))
+                        else:
+                            self._speech_active = False
+                            self._silence_count = 0
+                            results.append(
+                                VADResult(
+                                    utterance=utterance,
+                                    speech_state_changed=True,
+                                    speech_active=False,
+                                )
+                            )
 
             return results
 

@@ -4,7 +4,8 @@ import uuid
 import numpy as np
 
 from .stt import FasterWhisperSTT
-from .translator import ArgosTranslator
+from .text_norm import normalize_spoken_text
+from .translator import HybridTranslator
 from .tts import PiperTTS
 
 
@@ -20,14 +21,18 @@ class TranslationOutput:
     tts_pcm16: bytes | None = None
     tts_sample_rate: int | None = None
     tts_warning: str | None = None
+    stt_ms: int = 0
+    mt_ms: int = 0
+    tts_ms: int = 0
+    translator_backend: str = "nllb"
 
 
 class TranslationEngine:
-    """Coordinates STT -> Machine Translation -> TTS on CPU."""
+    """Coordinates STT -> Spoken Normalization -> Machine Translation -> TTS."""
 
     def __init__(self) -> None:
         self.stt = FasterWhisperSTT()
-        self.translator = ArgosTranslator()
+        self.translator = HybridTranslator()
         self.tts = PiperTTS()
 
     def preload_defaults(self) -> None:
@@ -52,6 +57,7 @@ class TranslationEngine:
             "dst_lang": dst_lang,
             "translation_ready": translation_ok,
             "tts_ready": tts_ok,
+            "translator_backend": self.translator.active_backend,
         }
 
     def process_audio(
@@ -63,9 +69,10 @@ class TranslationEngine:
         tts_enabled: bool = True,
     ) -> TranslationOutput | None:
         t0 = time.perf_counter()
-        stt_res = self.stt.transcribe(audio_f32, src_lang=src_lang)
+        stt_res = self.stt.transcribe(audio_f32, src_lang=src_lang, channel=channel)
         if stt_res is None:
             return None
+        stt_ms = int((time.perf_counter() - t0) * 1000)
 
         detected_src = stt_res.language if src_lang == "auto" else src_lang
         return self._translate_and_synthesize(
@@ -75,6 +82,7 @@ class TranslationEngine:
             dst_lang=dst_lang,
             tts_enabled=tts_enabled,
             t0=t0,
+            stt_ms=stt_ms,
         )
 
     def process_text(
@@ -96,6 +104,7 @@ class TranslationEngine:
             dst_lang=dst_lang,
             tts_enabled=tts_enabled,
             t0=time.perf_counter(),
+            stt_ms=0,
         )
 
     def _translate_and_synthesize(
@@ -106,12 +115,17 @@ class TranslationEngine:
         dst_lang: str,
         tts_enabled: bool,
         t0: float,
+        stt_ms: int,
     ) -> TranslationOutput:
-        translated = self.translator.translate(text, src_lang=src_lang, dst_lang=dst_lang)
+        mt_t0 = time.perf_counter()
+        normalized = normalize_spoken_text(text, src_lang)
+        translated = self.translator.translate(normalized, src_lang=src_lang, dst_lang=dst_lang)
+        mt_ms = int((time.perf_counter() - mt_t0) * 1000)
 
         tts_pcm16: bytes | None = None
         tts_sr: int | None = None
         tts_warning: str | None = None
+        tts_t0 = time.perf_counter()
 
         if tts_enabled and translated:
             if self.tts.has_catalog_voice(dst_lang):
@@ -122,7 +136,9 @@ class TranslationEngine:
             else:
                 tts_warning = f"Piper offline voice unavailable for '{dst_lang}'; subtitle-only."
 
+        tts_ms = int((time.perf_counter() - tts_t0) * 1000)
         latency_ms = int((time.perf_counter() - t0) * 1000)
+
         return TranslationOutput(
             utterance_id=uuid.uuid4().hex[:12],
             channel=channel,
@@ -134,5 +150,8 @@ class TranslationEngine:
             tts_pcm16=tts_pcm16,
             tts_sample_rate=tts_sr,
             tts_warning=tts_warning,
+            stt_ms=stt_ms,
+            mt_ms=mt_ms,
+            tts_ms=tts_ms,
+            translator_backend=self.translator.active_backend,
         )
-

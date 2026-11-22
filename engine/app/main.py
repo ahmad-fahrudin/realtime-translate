@@ -72,6 +72,8 @@ async def health() -> dict[str, object]:
         "status": "ok",
         "whisper_model": settings.whisper_model,
         "whisper_device": engine.stt.active_device,
+        "translator_backend": engine.translator.active_backend,
+        "translator_device": engine.translator.active_device,
         "bridge_running": bridge.running,
         "installed_translation_pairs": engine.translator.installed_pairs(),
         "installed_tts_languages": engine.tts.installed_languages(),
@@ -168,6 +170,10 @@ async def _send_output(ws: WebSocket, out: TranslationOutput) -> None:
         "source_text": out.source_text,
         "translated_text": out.translated_text,
         "latency_ms": out.latency_ms,
+        "stt_ms": out.stt_ms,
+        "mt_ms": out.mt_ms,
+        "tts_ms": out.tts_ms,
+        "translator_backend": out.translator_backend,
     }
     if out.tts_warning:
         payload["tts_warning"] = out.tts_warning

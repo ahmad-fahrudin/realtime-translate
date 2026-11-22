@@ -3,6 +3,7 @@ const el = (id) => document.getElementById(id);
 let ws = null;
 let isRunning = false;
 let pipWindow = null;
+let engineLabel = "Engine: Ready";
 
 function populateLanguages(items) {
   const myLang = el("myLang");
@@ -85,10 +86,14 @@ function appendFeed(item) {
   div.className = "feed-item";
   const tag = item.channel === "outgoing" ? "Anda" : "Lawan Bicara";
   const warn = item.tts_warning ? ` · ${item.tts_warning}` : "";
+  const hasStages = typeof item.mt_ms === "number";
+  const timing = hasStages
+    ? `${item.latency_ms} ms (STT ${item.stt_ms || 0} · MT ${item.mt_ms} · TTS ${item.tts_ms || 0})`
+    : `${item.latency_ms} ms`;
   div.innerHTML = `
     <div class="feed-meta">
       <span>${tag} (${item.src_lang} → ${item.dst_lang})</span>
-      <span>${item.latency_ms} ms${warn}</span>
+      <span>${timing}${warn}</span>
     </div>
     <div class="feed-src"></div>
     <div class="feed-dst"></div>
@@ -166,7 +171,7 @@ function connectControlWs() {
 
   ws.onopen = () => {
     el("engineDot").className = "dot ok";
-    el("engineStatus").textContent = "Engine: Ready";
+    el("engineStatus").textContent = engineLabel;
   };
 
   ws.onclose = () => {
@@ -224,10 +229,19 @@ async function openPipOverlay() {
 }
 
 async function init() {
-  const [langRes, devRes] = await Promise.all([
+  const [langRes, devRes, healthRes] = await Promise.all([
     fetch("/languages").then((r) => r.json()),
     fetch("/audio/devices").then((r) => r.json()),
+    fetch("/health").then((r) => r.json()).catch(() => null),
   ]);
+  if (healthRes && healthRes.whisper_model) {
+    const dev = healthRes.whisper_device || "cpu";
+    const mt = healthRes.translator_backend || "nllb";
+    engineLabel = `Ready · ${healthRes.whisper_model} (${dev}) · ${mt}`;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      el("engineStatus").textContent = engineLabel;
+    }
+  }
   populateLanguages(langRes.languages || []);
   applyDevices(devRes);
   connectControlWs();

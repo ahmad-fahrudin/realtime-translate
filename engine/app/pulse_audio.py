@@ -515,6 +515,9 @@ class PulseCallBridge:
             raw_chunk, _ = self._raw_peer_buf.pull(MIXER_BLOCK_SAMPLES)
             tts_chunk, has_tts = self._tts_in_buf.pull(MIXER_BLOCK_SAMPLES)
 
+            if has_tts:
+                self._out_vad.suppress_for(0.25)
+
             target_gain = self.config.ducking_level if has_tts else 1.0
             alpha = 0.25 if has_tts else 0.03
             self._duck_gain = (1.0 - alpha) * self._duck_gain + alpha * target_gain
@@ -557,6 +560,10 @@ class PulseCallBridge:
             "source_text": out.source_text,
             "translated_text": out.translated_text,
             "latency_ms": out.latency_ms,
+            "stt_ms": out.stt_ms,
+            "mt_ms": out.mt_ms,
+            "tts_ms": out.tts_ms,
+            "translator_backend": out.translator_backend,
         }
         if out.tts_warning:
             payload["tts_warning"] = out.tts_warning

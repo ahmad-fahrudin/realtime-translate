@@ -14,17 +14,25 @@ class Settings(BaseSettings):
     whisper_device: str = "auto"
     whisper_compute_type: str = "int8"
     whisper_cpu_threads: int = 4
+    stt_beam_size: int = 3
+    stt_context_ttl_sec: float = 15.0
 
     # VAD & Audio (16kHz mono PCM16)
     sample_rate: int = 16000
     frame_duration_ms: int = 20
     vad_aggressiveness: int = 2
     vad_energy_threshold: float = 350.0
+    vad_continue_energy_threshold: float = 180.0
     vad_silence_ms: int = 750
     vad_min_speech_ms: int = 240
     vad_max_utterance_ms: int = 10000
     vad_pre_roll_ms: int = 240
     vad_post_roll_ms: int = 200
+
+    # Translation Backend ("nllb" primary with "argos" fallback)
+    translator_backend: str = "nllb"
+    nllb_model_id: str = "JustFrederik/nllb-200-distilled-600M-ct2-int8"
+    nllb_device: str = "auto"
 
     # Preload default ID <-> EN models on startup if missing
     preload_default_models: bool = True
@@ -77,8 +85,27 @@ PIPER_VOICE_CATALOG: dict[str, dict[str, str]] = {
 }
 
 
+NLLB_LANG_CODES: dict[str, str] = {
+    "id": "ind_Latn",
+    "en": "eng_Latn",
+    "es": "spa_Latn",
+    "fr": "fra_Latn",
+    "de": "deu_Latn",
+    "zh": "zho_Hans",
+    "ar": "arb_Arab",
+    "ja": "jpn_Jpan",
+    "ko": "kor_Hang",
+}
+
+
 def piper_dir() -> Path:
     path = Path(settings.models_dir) / "piper"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def nllb_dir() -> Path:
+    path = Path(settings.models_dir) / "nllb"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
