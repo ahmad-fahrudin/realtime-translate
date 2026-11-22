@@ -9,18 +9,19 @@ from app.main import app, engine
 
 
 def test_vad_ptt_collects_and_flushes():
-    vad = StreamingVAD(sample_rate=16000, frame_duration_ms=20, min_speech_ms=100)
+    vad = StreamingVAD(sample_rate=16000, frame_duration_ms=20, min_speech_ms=100, max_utterance_ms=200)
     vad.set_mode("ptt")
     vad.set_ptt(True)
 
-    t = np.linspace(0, 0.2, 3200, endpoint=False)
+    # Feed 400ms (> max_utterance_ms=200ms) while still holding PTT: must NOT emit early
+    t = np.linspace(0, 0.4, 6400, endpoint=False)
     pcm16 = (np.sin(2 * np.pi * 440 * t) * 12000).astype(np.int16).tobytes()
     assert vad.feed(pcm16) == []
 
     utterance = vad.set_ptt(False)
     assert utterance is not None
     assert utterance.dtype == np.float32
-    assert len(utterance) == 3200
+    assert len(utterance) == 6400
 
 
 def test_vad_ignores_silence_in_auto_mode():

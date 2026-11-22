@@ -221,10 +221,6 @@ class StreamingVAD:
                     self.last_rms = self._frame_rms(self._apply_highpass(frame))
                     if self.ptt_pressed:
                         self._speech_frames.append(frame)
-                        if len(self._speech_frames) >= self.max_utterance_frames:
-                            utterance = self._collect_utterance()
-                            if utterance is not None:
-                                results.append(VADResult(utterance=utterance))
                     continue
 
                 is_speech = self._is_speech_frame(frame, continuing=self._speech_active)
