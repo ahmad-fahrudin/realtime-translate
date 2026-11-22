@@ -119,6 +119,7 @@ function sendWs(payload) {
 function setRunningState(running) {
   isRunning = running;
   const btn = el("startBtn");
+  btn.disabled = false;
   btn.textContent = running ? "Hentikan Translasi" : "Mulai Translasi";
   btn.className = running ? "danger" : "primary";
 }
@@ -152,6 +153,9 @@ function connectControlWs() {
       appendFeed(msg);
     } else if (msg.event === "error") {
       el("hintMsg").textContent = msg.message;
+      if (!isRunning) {
+        setRunningState(false);
+      }
     }
   };
 }
@@ -236,11 +240,20 @@ el("prepareBtn").addEventListener("click", async () => {
 });
 
 el("startBtn").addEventListener("click", () => {
+  const btn = el("startBtn");
   if (isRunning) {
+    btn.disabled = true;
     sendWs({ cmd: "stop" });
   } else {
+    const cfg = getConfig();
+    if (cfg.mic_source && cfg.vspeaker_monitor && cfg.mic_source === cfg.vspeaker_monitor) {
+      el("hintMsg").textContent = "Mikrofon Fisik dan Virtual Speaker Monitor tidak boleh sama.";
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = "Menyiapkan...";
     el("hintMsg").textContent = "";
-    sendWs({ cmd: "start", config: getConfig() });
+    sendWs({ cmd: "start", config: cfg });
   }
 });
 
@@ -250,8 +263,20 @@ el("modeSelect").addEventListener("change", () => {
   if (isRunning) sendWs({ cmd: "update_config", config: getConfig() });
 });
 
-el("pttBtn").addEventListener("mousedown", () => sendWs({ cmd: "ptt", pressed: true }));
-el("pttBtn").addEventListener("mouseup", () => sendWs({ cmd: "ptt", pressed: false }));
+let pttActive = false;
+function setPttState(pressed) {
+  if (pttActive === pressed) return;
+  pttActive = pressed;
+  sendWs({ cmd: "ptt", pressed });
+}
+el("pttBtn").addEventListener("mousedown", () => setPttState(true));
+el("pttBtn").addEventListener("mouseup", () => setPttState(false));
+el("pttBtn").addEventListener("mouseleave", () => setPttState(false));
+el("pttBtn").addEventListener("touchstart", (e) => {
+  e.preventDefault();
+  setPttState(true);
+});
+el("pttBtn").addEventListener("touchend", () => setPttState(false));
 el("bypassChk").addEventListener("change", () => {
   if (isRunning) sendWs({ cmd: "update_config", config: getConfig() });
 });

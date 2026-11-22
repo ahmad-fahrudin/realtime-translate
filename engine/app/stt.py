@@ -18,6 +18,7 @@ class FasterWhisperSTT:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._infer_lock = threading.Lock()
         self._model: WhisperModel | None = None
 
     def load(self) -> WhisperModel:
@@ -39,24 +40,29 @@ class FasterWhisperSTT:
         model = self.load()
         language = None if src_lang in ("auto", "", None) else src_lang
 
-        segments, info = model.transcribe(
-            audio_f32,
-            language=language,
-            beam_size=1,
-            best_of=1,
-            temperature=0.0,
-            vad_filter=False,
-            condition_on_previous_text=False,
-            without_timestamps=True,
-        )
+        with self._infer_lock:
+            segments, info = model.transcribe(
+                audio_f32,
+                language=language,
+                beam_size=2,
+                best_of=1,
+                temperature=0.0,
+                vad_filter=False,
+                condition_on_previous_text=False,
+                without_timestamps=True,
+            )
 
-        texts: list[str] = []
-        for seg in segments:
-            if seg.no_speech_prob > 0.65:
-                continue
-            chunk = seg.text.strip()
-            if chunk:
-                texts.append(chunk)
+            texts: list[str] = []
+            for seg in segments:
+                if seg.no_speech_prob > 0.6:
+                    continue
+                if getattr(seg, "compression_ratio", 1.0) > 2.4:
+                    continue
+                if getattr(seg, "avg_logprob", 0.0) < -1.15 and seg.no_speech_prob > 0.35:
+                    continue
+                chunk = seg.text.strip()
+                if chunk and any(ch.isalnum() for ch in chunk):
+                    texts.append(chunk)
 
         full_text = " ".join(texts).strip()
         if not full_text:

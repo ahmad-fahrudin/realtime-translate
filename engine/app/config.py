@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     models_dir: str = "/models"
 
     # STT (Faster-Whisper CPU int8)
-    whisper_model: str = "tiny"
+    whisper_model: str = "base"
     whisper_compute_type: str = "int8"
     whisper_cpu_threads: int = 4
 
@@ -19,10 +19,11 @@ class Settings(BaseSettings):
     frame_duration_ms: int = 20
     vad_aggressiveness: int = 2
     vad_energy_threshold: float = 350.0
-    vad_silence_ms: int = 600
-    vad_min_speech_ms: int = 300
+    vad_silence_ms: int = 750
+    vad_min_speech_ms: int = 240
     vad_max_utterance_ms: int = 10000
     vad_pre_roll_ms: int = 240
+    vad_post_roll_ms: int = 200
 
     # Preload default ID <-> EN models on startup if missing
     preload_default_models: bool = True

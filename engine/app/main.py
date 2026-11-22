@@ -131,7 +131,18 @@ async def ws_control(ws: WebSocket) -> None:
             elif cmd == "stop":
                 await bridge.stop()
             elif cmd == "update_config":
+                prev_my = bridge.config.my_lang
+                prev_peer = bridge.config.peer_lang
                 bridge.update_config(msg.get("config", {}))
+                if bridge.running and (
+                    bridge.config.my_lang != prev_my or bridge.config.peer_lang != prev_peer
+                ):
+                    await asyncio.to_thread(
+                        engine.prepare_pair, bridge.config.my_lang, bridge.config.peer_lang
+                    )
+                    await asyncio.to_thread(
+                        engine.prepare_pair, bridge.config.peer_lang, bridge.config.my_lang
+                    )
             elif cmd == "ptt":
                 bridge.set_ptt(bool(msg.get("pressed", False)))
             elif cmd == "test_text":
@@ -188,12 +199,7 @@ async def ws_translate(ws: WebSocket) -> None:
     }
     vad = StreamingVAD()
     send_lock = asyncio.Lock()
-    active_tasks: set[asyncio.Task] = set()
-
-    def spawn_task(coro) -> None:
-        task = asyncio.create_task(coro)
-        active_tasks.add(task)
-        task.add_done_callback(active_tasks.discard)
+    utterance_queue: asyncio.Queue = asyncio.Queue(maxsize=4)
 
     async def process_and_reply(audio_f32) -> None:
         try:
@@ -221,6 +227,25 @@ async def ws_translate(ws: WebSocket) -> None:
                     )
                 )
 
+    async def utterance_worker() -> None:
+        while True:
+            audio_f32 = await utterance_queue.get()
+            try:
+                await process_and_reply(audio_f32)
+            finally:
+                utterance_queue.task_done()
+
+    def enqueue_utterance(audio_f32) -> None:
+        if utterance_queue.full():
+            try:
+                utterance_queue.get_nowait()
+                utterance_queue.task_done()
+            except asyncio.QueueEmpty:
+                pass
+        utterance_queue.put_nowait(audio_f32)
+
+    worker_task = asyncio.create_task(utterance_worker())
+
     try:
         while True:
             msg = await ws.receive()
@@ -242,7 +267,7 @@ async def ws_translate(ws: WebSocket) -> None:
                                 )
                             )
                     if res.utterance is not None:
-                        spawn_task(process_and_reply(res.utterance))
+                        enqueue_utterance(res.utterance)
 
             elif msg.get("text") is not None:
                 data = json.loads(msg["text"])
@@ -276,7 +301,7 @@ async def ws_translate(ws: WebSocket) -> None:
                             json.dumps({"type": "vad", "channel": state["channel"], "active": False})
                         )
                     if utterance is not None:
-                        spawn_task(process_and_reply(utterance))
+                        enqueue_utterance(utterance)
 
                 elif msg_type == "test_text":
                     text = str(data.get("text", "")).strip()
@@ -296,5 +321,4 @@ async def ws_translate(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected (%s)", state["channel"])
     finally:
-        for task in list(active_tasks):
-            task.cancel()
+        worker_task.cancel()

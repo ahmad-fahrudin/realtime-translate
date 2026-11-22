@@ -29,6 +29,33 @@ def test_vad_ignores_silence_in_auto_mode():
     assert vad.feed(silence) == []
 
 
+def test_vad_rejects_short_noise_spike_and_emits_real_speech():
+    vad = StreamingVAD(
+        sample_rate=16000,
+        frame_duration_ms=20,
+        energy_threshold=350.0,
+        silence_ms=200,
+        min_speech_ms=160,
+        pre_roll_ms=100,
+        post_roll_ms=60,
+    )
+    frame_samples = 320
+    t = np.linspace(0, 0.02, frame_samples, endpoint=False)
+    voiced = (np.sin(2 * np.pi * 220 * t) * 12000).astype(np.int16).tobytes()
+    silent = np.zeros(frame_samples, dtype=np.int16).tobytes()
+
+    # A single 20ms click followed by silence must NOT emit an utterance
+    res_spike = vad.feed(voiced + silent * 15)
+    utterances_spike = [r.utterance for r in res_spike if r.utterance is not None]
+    assert utterances_spike == []
+
+    # Real speech (10 voiced frames = 200ms >= 160ms) followed by 200ms silence MUST emit
+    res_real = vad.feed(voiced * 10 + silent * 12)
+    utterances_real = [r.utterance for r in res_real if r.utterance is not None]
+    assert len(utterances_real) == 1
+    assert utterances_real[0].dtype == np.float32
+
+
 def test_ring_buffer_and_resample():
     buf = AudioRingBuffer(max_samples=100)
     buf.push(np.ones(40, dtype=np.float32))

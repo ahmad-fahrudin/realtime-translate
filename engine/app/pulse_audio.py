@@ -24,8 +24,10 @@ VMIC_SR = 22050
 MIXER_SR = 48000
 BLOCK_MS = 20
 MIXER_BLOCK_SAMPLES = int(MIXER_SR * BLOCK_MS / 1000)  # 960 samples @ 48kHz
+VMIC_BLOCK_SAMPLES = int(VMIC_SR * BLOCK_MS / 1000)  # 441 samples @ 22.05kHz
 CAPTURE_16K_BYTES = int(ENGINE_SR * BLOCK_MS / 1000) * 2  # 640 bytes @ 16kHz
 CAPTURE_48K_BYTES = MIXER_BLOCK_SAMPLES * 2  # 1920 bytes @ 48kHz
+MAX_UTTERANCE_QUEUE = 3
 
 
 def resample_linear(samples: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
@@ -179,22 +181,43 @@ class PulseCallBridge:
         self.running = False
 
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._lifecycle_lock = asyncio.Lock()
         self._stop_event = threading.Event()
         self._procs: list[subprocess.Popen[bytes]] = []
         self._threads: list[threading.Thread] = []
+        self._worker_tasks: list[asyncio.Task[Any]] = []
+        self._channel_queues: dict[str, asyncio.Queue[np.ndarray]] = {}
 
         self._out_vad = StreamingVAD()
         self._in_vad = StreamingVAD()
 
-        self._raw_peer_buf = AudioRingBuffer()
+        self._raw_peer_buf = AudioRingBuffer(max_samples=int(MIXER_SR * 0.25))
         self._tts_in_buf = AudioRingBuffer()
-        self._vmic_proc: subprocess.Popen[bytes] | None = None
-        self._vmic_lock = threading.Lock()
+        self._tts_out_buf = AudioRingBuffer(max_samples=VMIC_SR * 15)
+        self._bypass_out_buf = AudioRingBuffer(max_samples=int(VMIC_SR * 0.25))
         self._duck_gain = 1.0
 
     def _emit_threadsafe(self, payload: dict[str, Any]) -> None:
         if self._loop and not self._loop.is_closed():
             asyncio.run_coroutine_threadsafe(self.on_event(payload), self._loop)
+
+    def _enqueue_utterance_threadsafe(self, audio_f32: np.ndarray, channel: str) -> None:
+        if not self._loop or self._loop.is_closed():
+            return
+
+        def _put() -> None:
+            q = self._channel_queues.get(channel)
+            if q is None:
+                return
+            while q.qsize() >= MAX_UTTERANCE_QUEUE:
+                try:
+                    q.get_nowait()
+                    logger.warning("Dropped stale queued utterance on %s to preserve sync", channel)
+                except asyncio.QueueEmpty:
+                    break
+            q.put_nowait(audio_f32)
+
+        self._loop.call_soon_threadsafe(_put)
 
     def update_config(self, patch: dict[str, Any]) -> None:
         if "mic_source" in patch:
@@ -213,7 +236,13 @@ class PulseCallBridge:
             self.config.mode = str(patch["mode"])
             self._out_vad.set_mode(self.config.mode)
         if "bypass" in patch:
-            self.config.bypass = bool(patch["bypass"])
+            new_bypass = bool(patch["bypass"])
+            if new_bypass != self.config.bypass:
+                self.config.bypass = new_bypass
+                self._out_vad.reset()
+                self._out_vad.set_mode(self.config.mode)
+                self._tts_out_buf.clear()
+                self._bypass_out_buf.clear()
         if "ducking_level" in patch:
             self.config.ducking_level = max(0.0, min(1.0, float(patch["ducking_level"])))
 
@@ -223,10 +252,8 @@ class PulseCallBridge:
         self._out_vad.set_mode("ptt")
         utterance = self._out_vad.set_ptt(pressed)
         self._emit_threadsafe({"event": "vad", "channel": "outgoing", "active": pressed})
-        if utterance is not None and self._loop:
-            asyncio.run_coroutine_threadsafe(
-                self._process_utterance(utterance, "outgoing"), self._loop
-            )
+        if utterance is not None:
+            self._enqueue_utterance_threadsafe(utterance, "outgoing")
 
     async def test_text(self, channel: str, text: str) -> None:
         src = self.config.my_lang if channel == "outgoing" else self.config.peer_lang
@@ -236,57 +263,91 @@ class PulseCallBridge:
             await self._deliver_output(out)
 
     async def start(self, config_dict: dict[str, Any]) -> None:
-        await self.stop()
-        self.update_config(config_dict)
-        self._loop = asyncio.get_running_loop()
-        self._stop_event.clear()
-        self._out_vad.reset()
-        self._out_vad.set_mode(self.config.mode)
-        self._in_vad.reset()
-        self._raw_peer_buf.clear()
-        self._tts_in_buf.clear()
-        self._duck_gain = 1.0
+        async with self._lifecycle_lock:
+            await self._stop_unlocked()
+            self.update_config(config_dict)
+            self._loop = asyncio.get_running_loop()
+            self._stop_event.clear()
+            self._out_vad.reset()
+            self._out_vad.set_mode(self.config.mode)
+            self._in_vad.reset()
+            self._raw_peer_buf.clear()
+            self._tts_in_buf.clear()
+            self._tts_out_buf.clear()
+            self._bypass_out_buf.clear()
+            self._duck_gain = 1.0
 
-        # Warm up selected language pair
-        await asyncio.to_thread(self.engine.prepare_pair, self.config.my_lang, self.config.peer_lang)
-        await asyncio.to_thread(self.engine.prepare_pair, self.config.peer_lang, self.config.my_lang)
+            if (
+                self.config.mic_source
+                and self.config.vspeaker_monitor
+                and self.config.mic_source == self.config.vspeaker_monitor
+            ):
+                await self.on_event(
+                    {
+                        "event": "error",
+                        "message": "Mikrofon Fisik dan Virtual Speaker Monitor tidak boleh sama.",
+                    }
+                )
+                await self.on_event({"event": "status", "running": False})
+                return
 
-        if self.config.vmic_sink:
-            self._vmic_proc = subprocess.Popen(
-                [
-                    "pacat",
-                    f"--device={self.config.vmic_sink}",
-                    f"--rate={VMIC_SR}",
-                    "--channels=1",
-                    "--format=s16le",
-                    "--latency-msec=20",
-                ],
-                stdin=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+            # Warm up selected language pair
+            await asyncio.to_thread(
+                self.engine.prepare_pair, self.config.my_lang, self.config.peer_lang
             )
-            self._procs.append(self._vmic_proc)
+            await asyncio.to_thread(
+                self.engine.prepare_pair, self.config.peer_lang, self.config.my_lang
+            )
 
-        if self.config.mic_source:
-            t_mic = threading.Thread(target=self._mic_capture_loop, daemon=True)
-            t_mic.start()
-            self._threads.append(t_mic)
+            self._channel_queues = {
+                "outgoing": asyncio.Queue(),
+                "incoming": asyncio.Queue(),
+            }
+            self._worker_tasks = [
+                asyncio.create_task(self._channel_worker("outgoing")),
+                asyncio.create_task(self._channel_worker("incoming")),
+            ]
 
-        if self.config.vspeaker_monitor:
-            t_vspk = threading.Thread(target=self._vspeaker_capture_loop, daemon=True)
-            t_vspk.start()
-            self._threads.append(t_vspk)
+            if self.config.vmic_sink:
+                t_vmic = threading.Thread(target=self._vmic_writer_loop, daemon=True)
+                t_vmic.start()
+                self._threads.append(t_vmic)
 
-        if self.config.headphone_sink:
-            t_hp = threading.Thread(target=self._headphone_mixer_loop, daemon=True)
-            t_hp.start()
-            self._threads.append(t_hp)
+            if self.config.mic_source:
+                t_mic = threading.Thread(target=self._mic_capture_loop, daemon=True)
+                t_mic.start()
+                self._threads.append(t_mic)
 
-        self.running = True
-        await self.on_event({"event": "status", "running": True})
+            if self.config.vspeaker_monitor:
+                t_vspk = threading.Thread(target=self._vspeaker_capture_loop, daemon=True)
+                t_vspk.start()
+                self._threads.append(t_vspk)
+
+            if self.config.headphone_sink:
+                t_hp = threading.Thread(target=self._headphone_mixer_loop, daemon=True)
+                t_hp.start()
+                self._threads.append(t_hp)
+
+            self.running = True
+            await self.on_event({"event": "status", "running": True})
 
     async def stop(self) -> None:
+        async with self._lifecycle_lock:
+            await self._stop_unlocked()
+
+    async def _stop_unlocked(self) -> None:
         self._stop_event.set()
         self.running = False
+        for task in self._worker_tasks:
+            task.cancel()
+        for task in self._worker_tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self._worker_tasks.clear()
+        self._channel_queues.clear()
+
         for proc in self._procs:
             try:
                 if proc.stdin:
@@ -299,20 +360,58 @@ class PulseCallBridge:
                 except Exception:
                     pass
         self._procs.clear()
-        self._vmic_proc = None
         for t in self._threads:
             t.join(timeout=1.0)
         self._threads.clear()
         await self.on_event({"event": "status", "running": False})
 
-    def _write_vmic_pcm16(self, pcm16_bytes: bytes) -> None:
-        with self._vmic_lock:
-            if self._vmic_proc and self._vmic_proc.stdin and not self._vmic_proc.stdin.closed:
-                try:
-                    self._vmic_proc.stdin.write(pcm16_bytes)
-                    self._vmic_proc.stdin.flush()
-                except Exception:
-                    pass
+    async def _channel_worker(self, channel: str) -> None:
+        queue = self._channel_queues[channel]
+        while not self._stop_event.is_set():
+            audio_f32 = await queue.get()
+            try:
+                await self._process_utterance(audio_f32, channel)
+            finally:
+                queue.task_done()
+
+    def _vmic_writer_loop(self) -> None:
+        proc = subprocess.Popen(
+            [
+                "pacat",
+                f"--device={self.config.vmic_sink}",
+                f"--rate={VMIC_SR}",
+                "--channels=1",
+                "--format=s16le",
+                "--latency-msec=20",
+            ],
+            stdin=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        self._procs.append(proc)
+        assert proc.stdin is not None
+
+        tick = BLOCK_MS / 1000.0
+        next_t = time.perf_counter()
+
+        while not self._stop_event.is_set():
+            if self.config.bypass:
+                chunk, _ = self._bypass_out_buf.pull(VMIC_BLOCK_SAMPLES)
+            else:
+                chunk, _ = self._tts_out_buf.pull(VMIC_BLOCK_SAMPLES)
+
+            pcm = np.clip(chunk * 32767.0, -32768, 32767).astype(np.int16).tobytes()
+            try:
+                proc.stdin.write(pcm)
+                proc.stdin.flush()
+            except Exception:
+                break
+
+            next_t += tick
+            sleep_for = next_t - time.perf_counter()
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            else:
+                next_t = time.perf_counter()
 
     def _mic_capture_loop(self) -> None:
         proc = subprocess.Popen(
@@ -338,8 +437,7 @@ class PulseCallBridge:
             if self.config.bypass:
                 f32 = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
                 up = resample_linear(f32, ENGINE_SR, VMIC_SR)
-                pcm = np.clip(up * 32767.0, -32768, 32767).astype(np.int16).tobytes()
-                self._write_vmic_pcm16(pcm)
+                self._bypass_out_buf.push(up)
                 continue
 
             results = self._out_vad.feed(chunk)
@@ -348,10 +446,8 @@ class PulseCallBridge:
                     self._emit_threadsafe(
                         {"event": "vad", "channel": "outgoing", "active": res.speech_active}
                     )
-                if res.utterance is not None and self._loop:
-                    asyncio.run_coroutine_threadsafe(
-                        self._process_utterance(res.utterance, "outgoing"), self._loop
-                    )
+                if res.utterance is not None:
+                    self._enqueue_utterance_threadsafe(res.utterance, "outgoing")
 
     def _vspeaker_capture_loop(self) -> None:
         proc = subprocess.Popen(
@@ -393,10 +489,8 @@ class PulseCallBridge:
                     self._emit_threadsafe(
                         {"event": "vad", "channel": "incoming", "active": res.speech_active}
                     )
-                if res.utterance is not None and self._loop:
-                    asyncio.run_coroutine_threadsafe(
-                        self._process_utterance(res.utterance, "incoming"), self._loop
-                    )
+                if res.utterance is not None:
+                    self._enqueue_utterance_threadsafe(res.utterance, "incoming")
 
     def _headphone_mixer_loop(self) -> None:
         proc = subprocess.Popen(
@@ -472,8 +566,7 @@ class PulseCallBridge:
             f32 = np.frombuffer(out.tts_pcm16, dtype=np.int16).astype(np.float32) / 32768.0
             if out.channel == "outgoing":
                 resampled = resample_linear(f32, out.tts_sample_rate, VMIC_SR)
-                pcm = np.clip(resampled * 32767.0, -32768, 32767).astype(np.int16).tobytes()
-                self._write_vmic_pcm16(pcm)
+                self._tts_out_buf.push(resampled)
             else:
                 resampled = resample_linear(f32, out.tts_sample_rate, MIXER_SR)
                 self._tts_in_buf.push(resampled)

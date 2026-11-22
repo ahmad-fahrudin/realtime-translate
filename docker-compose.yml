@@ -7,12 +7,14 @@ services:
     ports:
       - "8765:8765"
     environment:
-      - RT_WHISPER_MODEL=tiny
+      - RT_WHISPER_MODEL=base
       - RT_WHISPER_COMPUTE_TYPE=int8
       - RT_WHISPER_CPU_THREADS=4
       - RT_PRELOAD_DEFAULT_MODELS=true
       - PULSE_SERVER=unix:/run/pulse/native
     volumes:
+      - ./engine/app:/app/app
+      - ./engine/tests:/app/tests
       - rt_models:/models
       - /run/user/${HOST_UID:-1000}/pulse:/run/pulse
     restart: unless-stopped
