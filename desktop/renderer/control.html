@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Realtime Translate</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="topbar">
+        <div class="topbar-title">Realtime Translate</div>
+        <div class="status-row">
+          <div class="status-pill">
+            <span id="engineDot" class="dot"></span>
+            <span id="engineStatus">Engine: Offline</span>
+          </div>
+          <div class="status-pill">
+            <span id="micVadDot" class="dot"></span>
+            <span>Mic</span>
+          </div>
+          <div class="status-pill">
+            <span id="peerVadDot" class="dot"></span>
+            <span>Peer</span>
+          </div>
+        </div>
+      </header>
+
+      <section class="section">
+        <div class="section-head">
+          <span class="section-title">Bahasa</span>
+          <button id="prepareBtn" type="button">Unduh Paket Bahasa</button>
+        </div>
+        <div class="lang-row">
+          <div class="field">
+            <label for="myLang">Bahasa Saya</label>
+            <select id="myLang"></select>
+          </div>
+          <button id="swapLangBtn" class="icon-btn" type="button" title="Tukar bahasa">⇄</button>
+          <div class="field">
+            <label for="peerLang">Bahasa Lawan Bicara</label>
+            <select id="peerLang"></select>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <span class="section-title">Routing Audio</span>
+          <div class="controls-group">
+            <button id="linuxVirtualBtn" type="button">Setup Virtual Audio (Linux)</button>
+            <button id="refreshDevBtn" type="button">Refresh</button>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="field">
+            <label for="micSelect">Mikrofon Fisik (Input)</label>
+            <select id="micSelect"></select>
+          </div>
+          <div class="field">
+            <label for="vmicSelect">Virtual Mic Sink (Ke WA/Zoom)</label>
+            <select id="vmicSelect"></select>
+          </div>
+          <div class="field">
+            <label for="vspkSelect">Virtual Speaker Monitor (Dari WA/Zoom)</label>
+            <select id="vspkSelect"></select>
+          </div>
+          <div class="field">
+            <label for="hpSelect">Headphone / Speaker Fisik (Output)</label>
+            <select id="hpSelect"></select>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="controls-bar">
+          <div class="controls-group">
+            <button id="startBtn" class="primary" type="button">Mulai Translasi</button>
+            <select id="modeSelect" aria-label="Mode Pemicu">
+              <option value="vad">Auto VAD</option>
+              <option value="ptt">Push-to-Talk</option>
+            </select>
+            <button id="pttBtn" type="button" hidden>Tahan untuk Bicara</button>
+          </div>
+          <div class="controls-group">
+            <label class="toggle-chip">
+              <input id="bypassChk" type="checkbox" />
+              <span>Bypass Mic</span>
+            </label>
+            <div class="slider-wrap">
+              <label for="duckSlider">Ducking</label>
+              <input id="duckSlider" type="range" min="0" max="100" value="18" />
+              <span id="duckVal">18%</span>
+            </div>
+            <button id="overlayBtn" type="button">Subtitle Overlay</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <span class="section-title">Transkrip Langsung</span>
+          <span id="hintMsg" class="status-pill"></span>
+        </div>
+        <div id="feed" class="transcript-feed"></div>
+        <div class="test-row">
+          <input id="testInput" type="text" placeholder="Ketik teks uji coba (contoh: Halo, apa kabar?)" />
+          <button id="testOutBtn" type="button">Uji Outgoing</button>
+          <button id="testInBtn" type="button">Uji Incoming</button>
+        </div>
+      </section>
+    </main>
+    <script src="control.js"></script>
+  </body>
+</html>
+

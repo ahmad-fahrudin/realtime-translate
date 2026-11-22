@@ -1,0 +1,13 @@
+{
+  "name": "realtime-translate-desktop",
+  "version": "0.1.0",
+  "description": "Cross-platform desktop audio bridge & live subtitle overlay for Realtime Translate",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.2.1"
+  }
+}
+

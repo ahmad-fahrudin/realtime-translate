@@ -1,0 +1,20 @@
+services:
+  engine:
+    build:
+      context: ./engine
+      dockerfile: Dockerfile
+    container_name: realtime-translate-engine
+    ports:
+      - "8765:8765"
+    environment:
+      - RT_WHISPER_MODEL=tiny
+      - RT_WHISPER_COMPUTE_TYPE=int8
+      - RT_WHISPER_CPU_THREADS=4
+      - RT_PRELOAD_DEFAULT_MODELS=true
+    volumes:
+      - rt_models:/models
+    restart: unless-stopped
+
+volumes:
+  rt_models:
+
