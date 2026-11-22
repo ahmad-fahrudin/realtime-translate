@@ -66,3 +66,25 @@ def test_vad_hysteresis_holds_soft_ending_and_splits_long_speech():
     res_split = vad.feed(loud * 20 + soft * 2 + loud * 10)
     split_utts = [r.utterance for r in res_split if r.utterance is not None]
     assert len(split_utts) == 1
+
+
+def test_tts_voice_resolution_and_pitch_shift():
+    from app.tts import PiperTTS, apply_pitch_shift
+
+    tts = PiperTTS()
+    en_male = tts.resolve_voice("en", "male")
+    en_female = tts.resolve_voice("en", "female")
+    assert en_male is not None and en_male["gender"] == "male"
+    assert en_female is not None and en_female["gender"] == "female"
+    assert en_male["model_id"] != en_female["model_id"]
+
+    id_male = tts.resolve_voice("id", "male")
+    assert id_male is not None and id_male["gender"] == "male"
+    assert float(id_male["pitch_ratio"]) < 1.0
+
+    # Verify ffmpeg rubberband pitch shift preserves valid PCM16 output
+    t = np.linspace(0, 0.25, 5512, endpoint=False)
+    pcm = (np.sin(2 * np.pi * 220 * t) * 10000).astype(np.int16).tobytes()
+    shifted = apply_pitch_shift(pcm, 22050, 0.78)
+    assert len(shifted) > 0
+    assert len(shifted) % 2 == 0

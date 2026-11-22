@@ -162,6 +162,8 @@ class BridgeConfig:
     headphone_sink: str = ""
     my_lang: str = "id"
     peer_lang: str = "en"
+    outgoing_voice: str = "auto"
+    incoming_voice: str = "auto"
     mode: str = "vad"
     bypass: bool = False
     ducking_level: float = 0.18
@@ -232,6 +234,10 @@ class PulseCallBridge:
             self.config.my_lang = str(patch["my_lang"])
         if "peer_lang" in patch:
             self.config.peer_lang = str(patch["peer_lang"])
+        if "outgoing_voice" in patch:
+            self.config.outgoing_voice = str(patch["outgoing_voice"])
+        if "incoming_voice" in patch:
+            self.config.incoming_voice = str(patch["incoming_voice"])
         if "mode" in patch:
             self.config.mode = str(patch["mode"])
             self._out_vad.set_mode(self.config.mode)
@@ -255,10 +261,15 @@ class PulseCallBridge:
         if utterance is not None:
             self._enqueue_utterance_threadsafe(utterance, "outgoing")
 
-    async def test_text(self, channel: str, text: str) -> None:
+    async def test_text(self, channel: str, text: str, config_patch: dict[str, Any] | None = None) -> None:
+        if config_patch:
+            self.update_config(config_patch)
         src = self.config.my_lang if channel == "outgoing" else self.config.peer_lang
         dst = self.config.peer_lang if channel == "outgoing" else self.config.my_lang
-        out = await asyncio.to_thread(self.engine.process_text, text, channel, src, dst, True)
+        voice_id = self.config.outgoing_voice if channel == "outgoing" else self.config.incoming_voice
+        out = await asyncio.to_thread(
+            self.engine.process_text, text, channel, src, dst, True, voice_id
+        )
         if out is not None:
             await self._deliver_output(out)
 
@@ -291,12 +302,16 @@ class PulseCallBridge:
                 await self.on_event({"event": "status", "running": False})
                 return
 
-            # Warm up selected language pair
+            # Warm up selected language pair + AI voices
             await asyncio.to_thread(
-                self.engine.prepare_pair, self.config.my_lang, self.config.peer_lang
-            )
-            await asyncio.to_thread(
-                self.engine.prepare_pair, self.config.peer_lang, self.config.my_lang
+                self.engine.prepare_pair,
+                self.config.my_lang,
+                self.config.peer_lang,
+                True,
+                None,
+                None,
+                self.config.outgoing_voice,
+                self.config.incoming_voice,
             )
 
             self._channel_queues = {
@@ -540,9 +555,10 @@ class PulseCallBridge:
     async def _process_utterance(self, audio_f32: np.ndarray, channel: str) -> None:
         src = self.config.my_lang if channel == "outgoing" else self.config.peer_lang
         dst = self.config.peer_lang if channel == "outgoing" else self.config.my_lang
+        voice_id = self.config.outgoing_voice if channel == "outgoing" else self.config.incoming_voice
         try:
             out = await asyncio.to_thread(
-                self.engine.process_audio, audio_f32, channel, src, dst, True
+                self.engine.process_audio, audio_f32, channel, src, dst, True, voice_id
             )
             if out is not None:
                 await self._deliver_output(out)

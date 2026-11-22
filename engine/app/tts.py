@@ -1,14 +1,17 @@
 from dataclasses import dataclass
+import logging
 from pathlib import Path
+import subprocess
 import threading
 from typing import Callable
 import httpx
-from piper import PiperVoice
+from piper import PiperVoice, SynthesisConfig
 
-from .config import PIPER_VOICE_CATALOG, piper_dir
+from .config import PIPER_VOICES, piper_dir
 from .downloader import stream_download_file
 
 HF_PIPER_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
+logger = logging.getLogger("rt-tts")
 
 
 @dataclass
@@ -17,76 +20,154 @@ class TTSAudio:
     sample_rate: int
 
 
+def apply_pitch_shift(pcm16_bytes: bytes, sample_rate: int, pitch_ratio: float) -> bytes:
+    """Pitch-shift mono s16le PCM without changing duration via ffmpeg rubberband."""
+    if not pcm16_bytes or abs(pitch_ratio - 1.0) < 0.01:
+        return pcm16_bytes
+    try:
+        res = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "s16le",
+                "-ar",
+                str(sample_rate),
+                "-ac",
+                "1",
+                "-i",
+                "pipe:0",
+                "-af",
+                f"rubberband=pitch={pitch_ratio:.3f}",
+                "-f",
+                "s16le",
+                "-ar",
+                str(sample_rate),
+                "-ac",
+                "1",
+                "pipe:1",
+            ],
+            input=pcm16_bytes,
+            capture_output=True,
+            check=True,
+        )
+        return res.stdout or pcm16_bytes
+    except Exception as exc:
+        logger.warning("Pitch shift (ratio=%.2f) failed (%s); returning original audio", pitch_ratio, exc)
+        return pcm16_bytes
+
+
 class PiperTTS:
-    """Offline CPU ONNX Text-to-Speech using Piper."""
+    """Offline CPU ONNX Text-to-Speech using Piper with multi-voice & gender support."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._voices: dict[str, PiperVoice] = {}
 
     def has_catalog_voice(self, lang: str) -> bool:
-        return lang in PIPER_VOICE_CATALOG
+        return bool(PIPER_VOICES.get(lang))
+
+    def resolve_voice(self, lang: str, voice_id: str | None = None) -> dict[str, object] | None:
+        items = PIPER_VOICES.get(lang)
+        if not items:
+            return None
+        if not voice_id or voice_id == "auto":
+            return items[0]
+        if voice_id in ("male", "female"):
+            return next((it for it in items if it["gender"] == voice_id), items[0])
+        return next((it for it in items if it["id"] == voice_id), items[0])
+
+    def _model_files_exist(self, model_id: str) -> bool:
+        base = piper_dir()
+        return (base / f"{model_id}.onnx").exists() and (base / f"{model_id}.onnx.json").exists()
 
     def installed_languages(self) -> list[str]:
-        base = piper_dir()
         installed: list[str] = []
-        for lang, meta in PIPER_VOICE_CATALOG.items():
-            onnx_file = base / f"{meta['voice_id']}.onnx"
-            cfg_file = base / f"{meta['voice_id']}.onnx.json"
-            if onnx_file.exists() and cfg_file.exists():
+        for lang, items in PIPER_VOICES.items():
+            if any(self._model_files_exist(str(it["model_id"])) for it in items):
                 installed.append(lang)
         return installed
 
-    def is_voice_installed(self, lang: str) -> bool:
-        meta = PIPER_VOICE_CATALOG.get(lang)
+    def is_voice_installed(self, lang: str, voice_id: str | None = None) -> bool:
+        meta = self.resolve_voice(lang, voice_id)
         if meta is None:
             return False
-        base = piper_dir()
-        return (base / f"{meta['voice_id']}.onnx").exists() and (
-            base / f"{meta['voice_id']}.onnx.json"
-        ).exists()
+        return self._model_files_exist(str(meta["model_id"]))
 
-    def ensure_voice(
+    def list_voices_by_lang(self) -> dict[str, list[dict[str, object]]]:
+        result: dict[str, list[dict[str, object]]] = {}
+        for lang, items in PIPER_VOICES.items():
+            result[lang] = [
+                {
+                    "id": str(it["id"]),
+                    "label": str(it["label"]),
+                    "gender": str(it["gender"]),
+                    "installed": self._model_files_exist(str(it["model_id"])),
+                }
+                for it in items
+            ]
+        return result
+
+    def ensure_voice_meta(
         self,
         lang: str,
+        voice_id: str | None = None,
         cancel_event: threading.Event | None = None,
         on_progress: Callable[[int, int, str], None] | None = None,
-    ) -> PiperVoice | None:
-        if lang in self._voices:
-            return self._voices[lang]
-
-        meta = PIPER_VOICE_CATALOG.get(lang)
+    ) -> tuple[PiperVoice, dict[str, object]] | None:
+        meta = self.resolve_voice(lang, voice_id)
         if meta is None:
             return None
 
+        model_id = str(meta["model_id"])
+        if model_id in self._voices:
+            return self._voices[model_id], meta
+
         with self._lock:
-            if lang in self._voices:
-                return self._voices[lang]
+            if model_id in self._voices:
+                return self._voices[model_id], meta
 
             base = piper_dir()
-            onnx_path = base / f"{meta['voice_id']}.onnx"
-            cfg_path = base / f"{meta['voice_id']}.onnx.json"
+            onnx_path = base / f"{model_id}.onnx"
+            cfg_path = base / f"{model_id}.onnx.json"
 
             if not onnx_path.exists() or not cfg_path.exists():
                 self._download_voice(
-                    meta["repo_path"],
+                    str(meta["repo_path"]),
                     onnx_path,
                     cfg_path,
-                    lang=lang,
+                    label_tag=str(meta["id"]),
                     cancel_event=cancel_event,
                     on_progress=on_progress,
                 )
 
             voice = PiperVoice.load(str(onnx_path), config_path=str(cfg_path))
-            self._voices[lang] = voice
-            return voice
+            self._voices[model_id] = voice
+            return voice, meta
+
+    def ensure_voice(
+        self,
+        lang: str,
+        voice_id: str | None = None,
+        cancel_event: threading.Event | None = None,
+        on_progress: Callable[[int, int, str], None] | None = None,
+    ) -> PiperVoice | None:
+        res = self.ensure_voice_meta(
+            lang=lang,
+            voice_id=voice_id,
+            cancel_event=cancel_event,
+            on_progress=on_progress,
+        )
+        return res[0] if res is not None else None
 
     def _download_voice(
         self,
         repo_path: str,
         onnx_path: Path,
         cfg_path: Path,
-        lang: str = "",
+        label_tag: str = "",
         cancel_event: threading.Event | None = None,
         on_progress: Callable[[int, int, str], None] | None = None,
     ) -> None:
@@ -104,7 +185,7 @@ class PiperTTS:
                     nonlocal downloaded
                     downloaded += delta
                     if on_progress is not None:
-                        on_progress(downloaded, content_len or 0, f"voice-{lang}")
+                        on_progress(downloaded, content_len or 0, label_tag or onnx_path.stem)
 
                 stream_download_file(
                     client,
@@ -114,27 +195,39 @@ class PiperTTS:
                     on_chunk=_on_chunk,
                 )
 
-    def synthesize(self, text: str, lang: str) -> TTSAudio | None:
+    def synthesize(
+        self,
+        text: str,
+        lang: str,
+        voice_id: str | None = None,
+    ) -> TTSAudio | None:
         clean = text.strip()
         if not clean:
             return None
 
-        voice = self.ensure_voice(lang)
-        if voice is None:
+        loaded = self.ensure_voice_meta(lang, voice_id=voice_id)
+        if loaded is None:
             return None
+        voice, meta = loaded
+
+        speaker_id = meta.get("speaker_id")
+        syn_cfg = SynthesisConfig(speaker_id=int(speaker_id)) if speaker_id is not None else None
 
         chunks: list[bytes] = []
-        # Handle both piper-tts >= 1.3 (AudioChunk iterable) and older stream_raw API
         if hasattr(voice, "synthesize_stream_raw"):
             for raw in voice.synthesize_stream_raw(clean):
                 chunks.append(raw)
         else:
-            for audio_chunk in voice.synthesize(clean):
+            for audio_chunk in voice.synthesize(clean, syn_config=syn_cfg):
                 chunks.append(audio_chunk.audio_int16_bytes)
 
         pcm = b"".join(chunks)
         if not pcm:
             return None
 
-        return TTSAudio(pcm16_bytes=pcm, sample_rate=int(voice.config.sample_rate))
+        sample_rate = int(voice.config.sample_rate)
+        pitch_ratio = float(meta.get("pitch_ratio", 1.0))
+        if abs(pitch_ratio - 1.0) >= 0.01:
+            pcm = apply_pitch_shift(pcm, sample_rate, pitch_ratio)
 
+        return TTSAudio(pcm16_bytes=pcm, sample_rate=sample_rate)

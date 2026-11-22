@@ -6,6 +6,43 @@ let pipWindow = null;
 let engineLabel = "Engine: Ready";
 let activeWhisperModel = "small";
 let activeTranslatorBackend = "nllb";
+let voicesByLang = {};
+let savedVoicePrefs = { outgoing_voice: "auto", incoming_voice: "auto" };
+
+function populateVoiceSelect(selectEl, lang, preferredId) {
+  if (!selectEl) return;
+  const prev = selectEl.value;
+  const items = voicesByLang[lang] || [];
+  selectEl.innerHTML = "";
+  if (items.length === 0) {
+    selectEl.add(new Option("Tidak tersedia (Subtitle saja)", "auto"));
+    selectEl.value = "auto";
+    return;
+  }
+  for (const v of items) {
+    const tag = v.installed ? "Terpasang" : "Perlu Unduh";
+    selectEl.add(new Option(`${v.label} [${tag}]`, v.id));
+  }
+  if (prev && [...selectEl.options].some((o) => o.value === prev)) {
+    selectEl.value = prev;
+  } else if (preferredId && [...selectEl.options].some((o) => o.value === preferredId)) {
+    selectEl.value = preferredId;
+  }
+}
+
+function refreshVoiceSelects(useSavedPrefs = false) {
+  // Outgoing speaks in peerLang; incoming speaks in myLang
+  populateVoiceSelect(
+    el("outgoingVoiceSelect"),
+    el("peerLang").value,
+    useSavedPrefs ? savedVoicePrefs.outgoing_voice : null
+  );
+  populateVoiceSelect(
+    el("incomingVoiceSelect"),
+    el("myLang").value,
+    useSavedPrefs ? savedVoicePrefs.incoming_voice : null
+  );
+}
 
 function populateWhisperModels(data) {
   const sel = el("whisperModelSelect");
@@ -102,6 +139,8 @@ function getConfig() {
     headphone_sink: el("hpSelect").value,
     my_lang: el("myLang").value,
     peer_lang: el("peerLang").value,
+    outgoing_voice: el("outgoingVoiceSelect").value,
+    incoming_voice: el("incomingVoiceSelect").value,
     mode: el("modeSelect").value,
     bypass: el("bypassChk").checked,
     ducking_level: Number(el("duckSlider").value) / 100,
@@ -160,6 +199,8 @@ const LOCKABLE_CONTROL_IDS = [
   "myLang",
   "swapLangBtn",
   "peerLang",
+  "outgoingVoiceSelect",
+  "incomingVoiceSelect",
   "whisperModelSelect",
   "applyWhisperBtn",
   "prepareBtn",
@@ -292,11 +333,12 @@ async function openPipOverlay() {
 }
 
 async function init() {
-  const [langRes, devRes, healthRes, whisperRes] = await Promise.all([
+  const [langRes, devRes, healthRes, whisperRes, voicesRes] = await Promise.all([
     fetch("/languages").then((r) => r.json()),
     fetch("/audio/devices").then((r) => r.json()),
     fetch("/health").then((r) => r.json()).catch(() => null),
     fetch("/models/whisper").then((r) => r.json()).catch(() => null),
+    fetch("/voices").then((r) => r.json()).catch(() => null),
   ]);
   if (healthRes && healthRes.whisper_model) {
     activeWhisperModel = healthRes.whisper_model;
@@ -307,7 +349,12 @@ async function init() {
       el("engineStatus").textContent = engineLabel;
     }
   }
+  if (voicesRes && voicesRes.voices) {
+    voicesByLang = voicesRes.voices;
+    if (voicesRes.prefs) savedVoicePrefs = voicesRes.prefs;
+  }
   populateLanguages(langRes.languages || []);
+  refreshVoiceSelects(true);
   populateWhisperModels(whisperRes);
   applyDevices(devRes);
   connectControlWs();
@@ -389,6 +436,7 @@ el("swapLangBtn").addEventListener("click", () => {
   const a = el("myLang").value;
   el("myLang").value = el("peerLang").value;
   el("peerLang").value = a;
+  refreshVoiceSelects(false);
   if (isRunning) sendWs({ cmd: "update_config", config: getConfig() });
 });
 
@@ -399,7 +447,7 @@ el("prepareBtn").addEventListener("click", async () => {
   el("langProgressWrap").hidden = false;
   el("langProgressBar").style.width = "0%";
   el("langProgressText").textContent = "0% · Menyiapkan paket bahasa...";
-  el("hintMsg").textContent = "Mengunduh paket bahasa...";
+  el("hintMsg").textContent = "Mengunduh paket bahasa & suara AI...";
   try {
     const resp = await fetch("/models/prepare", {
       method: "POST",
@@ -408,15 +456,22 @@ el("prepareBtn").addEventListener("click", async () => {
         src_lang: el("myLang").value,
         dst_lang: el("peerLang").value,
         bidirectional: true,
+        outgoing_voice: el("outgoingVoiceSelect").value,
+        incoming_voice: el("incomingVoiceSelect").value,
       }),
     });
     const data = await resp.json();
     if (!resp.ok) {
       throw new Error(data.detail || "Gagal mengunduh paket bahasa");
     }
+    const voicesRes = await fetch("/voices").then((r) => r.json()).catch(() => null);
+    if (voicesRes && voicesRes.voices) {
+      voicesByLang = voicesRes.voices;
+      refreshVoiceSelects(false);
+    }
     el("hintMsg").textContent = data.cancelled
       ? "Unduhan paket bahasa dibatalkan."
-      : "Paket bahasa siap.";
+      : "Paket bahasa & suara AI siap.";
   } catch (err) {
     el("hintMsg").textContent = `Gagal unduh: ${err.message}`;
   } finally {
@@ -479,18 +534,34 @@ el("duckSlider").addEventListener("input", () => {
 });
 ["myLang", "peerLang"].forEach((id) => {
   el(id).addEventListener("change", () => {
+    refreshVoiceSelects(false);
     if (isRunning) sendWs({ cmd: "update_config", config: getConfig() });
+  });
+});
+
+["outgoingVoiceSelect", "incomingVoiceSelect"].forEach((id) => {
+  el(id).addEventListener("change", () => {
+    const cfg = getConfig();
+    fetch("/voices/prefs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        outgoing_voice: cfg.outgoing_voice,
+        incoming_voice: cfg.incoming_voice,
+      }),
+    }).catch(() => {});
+    if (isRunning) sendWs({ cmd: "update_config", config: cfg });
   });
 });
 
 el("pipBtn").addEventListener("click", openPipOverlay);
 el("testOutBtn").addEventListener("click", () => {
   const text = el("testInput").value.trim();
-  if (text) sendWs({ cmd: "test_text", channel: "outgoing", text });
+  if (text) sendWs({ cmd: "test_text", channel: "outgoing", text, config: getConfig() });
 });
 el("testInBtn").addEventListener("click", () => {
   const text = el("testInput").value.trim();
-  if (text) sendWs({ cmd: "test_text", channel: "incoming", text });
+  if (text) sendWs({ cmd: "test_text", channel: "incoming", text, config: getConfig() });
 });
 
 init();

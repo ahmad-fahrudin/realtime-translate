@@ -52,6 +52,8 @@ class TranslationEngine:
         bidirectional: bool = False,
         cancel_event: threading.Event | None = None,
         on_progress: Callable[[int, int, str], None] | None = None,
+        outgoing_voice: str = "auto",
+        incoming_voice: str = "auto",
     ) -> dict[str, object]:
         self.stt.load()
         if cancel_event is not None and cancel_event.is_set():
@@ -69,15 +71,28 @@ class TranslationEngine:
                 if not self.translator.ensure_language_pair(s_lang, d_lang):
                     translation_ok = False
 
-        voice_langs = [dst_lang] if not bidirectional else [src_lang, dst_lang]
-        unique_voices: list[str] = []
-        for lang in voice_langs:
-            if lang != "auto" and lang not in unique_voices and self.tts.has_catalog_voice(lang):
-                unique_voices.append(lang)
+        # Outgoing speaks in dst_lang (peer's language); incoming speaks in src_lang (my language)
+        voice_targets: list[tuple[str, str]] = []
+        if dst_lang != "auto" and self.tts.has_catalog_voice(dst_lang):
+            voice_targets.append((dst_lang, outgoing_voice))
+        if bidirectional and src_lang != "auto" and self.tts.has_catalog_voice(src_lang):
+            voice_targets.append((src_lang, incoming_voice))
 
-        tts_ok = True if unique_voices else False
-        total_voices = len(unique_voices)
-        for idx, lang in enumerate(unique_voices):
+        # Deduplicate by resolved physical model_id so we don't report duplicate downloads
+        unique_targets: list[tuple[str, str]] = []
+        seen_models: set[str] = set()
+        for lang, vid in voice_targets:
+            meta = self.tts.resolve_voice(lang, vid)
+            if meta is None:
+                continue
+            model_id = str(meta["model_id"])
+            if model_id not in seen_models:
+                seen_models.add(model_id)
+                unique_targets.append((lang, vid))
+
+        tts_ok = True if unique_targets else False
+        total_voices = len(unique_targets)
+        for idx, (lang, vid) in enumerate(unique_targets):
             if cancel_event is not None and cancel_event.is_set():
                 raise DownloadCancelled("Unduhan dibatalkan oleh pengguna.")
 
@@ -87,16 +102,17 @@ class TranslationEngine:
                 if on_progress is None:
                     return
                 if tot > 0:
-                    # Map multi-voice progress cleanly into a unified 0..10000 scale when multiple voices download
                     voice_frac = min(1.0, dl / tot)
                     overall_pct = int(((voice_idx + voice_frac) / max(1, total_voices)) * 100)
                     on_progress(dl, tot, f"{label}|{overall_pct}")
 
+            need_dl = not self.tts.is_voice_installed(lang, vid)
             ok = (
                 self.tts.ensure_voice(
                     lang,
+                    voice_id=vid,
                     cancel_event=cancel_event,
-                    on_progress=_voice_progress if not self.tts.is_voice_installed(lang) else None,
+                    on_progress=_voice_progress if need_dl else None,
                 )
                 is not None
             )
@@ -118,6 +134,7 @@ class TranslationEngine:
         src_lang: str,
         dst_lang: str,
         tts_enabled: bool = True,
+        voice_id: str | None = None,
     ) -> TranslationOutput | None:
         t0 = time.perf_counter()
         stt_res = self.stt.transcribe(audio_f32, src_lang=src_lang, channel=channel)
@@ -134,6 +151,7 @@ class TranslationEngine:
             tts_enabled=tts_enabled,
             t0=t0,
             stt_ms=stt_ms,
+            voice_id=voice_id,
         )
 
     def process_text(
@@ -143,6 +161,7 @@ class TranslationEngine:
         src_lang: str,
         dst_lang: str,
         tts_enabled: bool = True,
+        voice_id: str | None = None,
     ) -> TranslationOutput | None:
         clean = text.strip()
         if not clean:
@@ -156,6 +175,7 @@ class TranslationEngine:
             tts_enabled=tts_enabled,
             t0=time.perf_counter(),
             stt_ms=0,
+            voice_id=voice_id,
         )
 
     def _translate_and_synthesize(
@@ -167,6 +187,7 @@ class TranslationEngine:
         tts_enabled: bool,
         t0: float,
         stt_ms: int,
+        voice_id: str | None = None,
     ) -> TranslationOutput:
         mt_t0 = time.perf_counter()
         normalized = normalize_spoken_text(text, src_lang)
@@ -180,7 +201,7 @@ class TranslationEngine:
 
         if tts_enabled and translated:
             if self.tts.has_catalog_voice(dst_lang):
-                audio = self.tts.synthesize(translated, lang=dst_lang)
+                audio = self.tts.synthesize(translated, lang=dst_lang, voice_id=voice_id)
                 if audio is not None:
                     tts_pcm16 = audio.pcm16_bytes
                     tts_sr = audio.sample_rate

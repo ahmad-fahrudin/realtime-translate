@@ -52,36 +52,161 @@ SUPPORTED_LANGUAGES: dict[str, dict[str, str]] = {
     "ko": {"name": "Korean", "native": "한국어"},
 }
 
-# Verified rhasspy/piper-voices paths on Hugging Face
+# Verified rhasspy/piper-voices paths on Hugging Face.
+# Languages with a single native voice (e.g. id, ar) also expose a pitch-shifted
+# offline variant via ffmpeg rubberband so both male/female presets are available.
+PIPER_VOICES: dict[str, list[dict[str, object]]] = {
+    "id": [
+        {
+            "id": "id_ID-news_tts-medium",
+            "model_id": "id_ID-news_tts-medium",
+            "label": "News TTS (Perempuan)",
+            "gender": "female",
+            "repo_path": "id/id_ID/news_tts/medium/id_ID-news_tts-medium",
+            "pitch_ratio": 1.0,
+        },
+        {
+            "id": "id_ID-news_tts-medium#male",
+            "model_id": "id_ID-news_tts-medium",
+            "label": "News TTS · Nada Rendah (Laki-laki)",
+            "gender": "male",
+            "repo_path": "id/id_ID/news_tts/medium/id_ID-news_tts-medium",
+            "pitch_ratio": 0.78,
+        },
+    ],
+    "en": [
+        {
+            "id": "en_US-lessac-medium",
+            "model_id": "en_US-lessac-medium",
+            "label": "Lessac US (Perempuan)",
+            "gender": "female",
+            "repo_path": "en/en_US/lessac/medium/en_US-lessac-medium",
+            "pitch_ratio": 1.0,
+        },
+        {
+            "id": "en_US-amy-medium",
+            "model_id": "en_US-amy-medium",
+            "label": "Amy US (Perempuan)",
+            "gender": "female",
+            "repo_path": "en/en_US/amy/medium/en_US-amy-medium",
+            "pitch_ratio": 1.0,
+        },
+        {
+            "id": "en_US-ryan-medium",
+            "model_id": "en_US-ryan-medium",
+            "label": "Ryan US (Laki-laki)",
+            "gender": "male",
+            "repo_path": "en/en_US/ryan/medium/en_US-ryan-medium",
+            "pitch_ratio": 1.0,
+        },
+        {
+            "id": "en_GB-alan-medium",
+            "model_id": "en_GB-alan-medium",
+            "label": "Alan UK (Laki-laki)",
+            "gender": "male",
+            "repo_path": "en/en_GB/alan/medium/en_GB-alan-medium",
+            "pitch_ratio": 1.0,
+        },
+    ],
+    "es": [
+        {
+            "id": "es_ES-davefx-medium",
+            "model_id": "es_ES-davefx-medium",
+            "label": "Davefx ES (Laki-laki)",
+            "gender": "male",
+            "repo_path": "es/es_ES/davefx/medium/es_ES-davefx-medium",
+            "pitch_ratio": 1.0,
+        },
+        {
+            "id": "es_AR-daniela-high",
+            "model_id": "es_AR-daniela-high",
+            "label": "Daniela AR (Perempuan)",
+            "gender": "female",
+            "repo_path": "es/es_AR/daniela/high/es_AR-daniela-high",
+            "pitch_ratio": 1.0,
+        },
+    ],
+    "fr": [
+        {
+            "id": "fr_FR-siwis-medium",
+            "model_id": "fr_FR-siwis-medium",
+            "label": "Siwis FR (Perempuan)",
+            "gender": "female",
+            "repo_path": "fr/fr_FR/siwis/medium/fr_FR-siwis-medium",
+            "pitch_ratio": 1.0,
+        },
+        {
+            "id": "fr_FR-tom-medium",
+            "model_id": "fr_FR-tom-medium",
+            "label": "Tom FR (Laki-laki)",
+            "gender": "male",
+            "repo_path": "fr/fr_FR/tom/medium/fr_FR-tom-medium",
+            "pitch_ratio": 1.0,
+        },
+    ],
+    "de": [
+        {
+            "id": "de_DE-thorsten-medium",
+            "model_id": "de_DE-thorsten-medium",
+            "label": "Thorsten DE (Laki-laki)",
+            "gender": "male",
+            "repo_path": "de/de_DE/thorsten/medium/de_DE-thorsten-medium",
+            "pitch_ratio": 1.0,
+        },
+        {
+            "id": "de_DE-kerstin-medium",
+            "model_id": "de_DE-kerstin-medium",
+            "label": "Kerstin DE (Perempuan)",
+            "gender": "female",
+            "repo_path": "de/de_DE/kerstin/medium/de_DE-kerstin-medium",
+            "pitch_ratio": 1.0,
+        },
+    ],
+    "zh": [
+        {
+            "id": "zh_CN-huayan-medium",
+            "model_id": "zh_CN-huayan-medium",
+            "label": "Huayan ZH (Perempuan)",
+            "gender": "female",
+            "repo_path": "zh/zh_CN/huayan/medium/zh_CN-huayan-medium",
+            "pitch_ratio": 1.0,
+        },
+        {
+            "id": "zh_CN-chaowen-medium",
+            "model_id": "zh_CN-chaowen-medium",
+            "label": "Chaowen ZH (Laki-laki)",
+            "gender": "male",
+            "repo_path": "zh/zh_CN/chaowen/medium/zh_CN-chaowen-medium",
+            "pitch_ratio": 1.0,
+        },
+    ],
+    "ar": [
+        {
+            "id": "ar_JO-kareem-medium",
+            "model_id": "ar_JO-kareem-medium",
+            "label": "Kareem AR (Laki-laki)",
+            "gender": "male",
+            "repo_path": "ar/ar_JO/kareem/medium/ar_JO-kareem-medium",
+            "pitch_ratio": 1.0,
+        },
+        {
+            "id": "ar_JO-kareem-medium#female",
+            "model_id": "ar_JO-kareem-medium",
+            "label": "Kareem · Nada Tinggi (Perempuan)",
+            "gender": "female",
+            "repo_path": "ar/ar_JO/kareem/medium/ar_JO-kareem-medium",
+            "pitch_ratio": 1.24,
+        },
+    ],
+}
+
+# Backwards-compatible default voice map (first entry per language)
 PIPER_VOICE_CATALOG: dict[str, dict[str, str]] = {
-    "id": {
-        "voice_id": "id_ID-news_tts-medium",
-        "repo_path": "id/id_ID/news_tts/medium/id_ID-news_tts-medium",
-    },
-    "en": {
-        "voice_id": "en_US-lessac-medium",
-        "repo_path": "en/en_US/lessac/medium/en_US-lessac-medium",
-    },
-    "es": {
-        "voice_id": "es_ES-davefx-medium",
-        "repo_path": "es/es_ES/davefx/medium/es_ES-davefx-medium",
-    },
-    "fr": {
-        "voice_id": "fr_FR-siwis-medium",
-        "repo_path": "fr/fr_FR/siwis/medium/fr_FR-siwis-medium",
-    },
-    "de": {
-        "voice_id": "de_DE-thorsten-medium",
-        "repo_path": "de/de_DE/thorsten/medium/de_DE-thorsten-medium",
-    },
-    "zh": {
-        "voice_id": "zh_CN-huayan-medium",
-        "repo_path": "zh/zh_CN/huayan/medium/zh_CN-huayan-medium",
-    },
-    "ar": {
-        "voice_id": "ar_JO-kareem-medium",
-        "repo_path": "ar/ar_JO/kareem/medium/ar_JO-kareem-medium",
-    },
+    lang: {
+        "voice_id": str(items[0]["model_id"]),
+        "repo_path": str(items[0]["repo_path"]),
+    }
+    for lang, items in PIPER_VOICES.items()
 }
 
 
@@ -89,8 +214,8 @@ WHISPER_MODEL_CATALOG: list[dict[str, str]] = [
     {"id": "tiny", "label": "Tiny · Tercepat (akurasi rendah)"},
     {"id": "base", "label": "Base · Cepat"},
     {"id": "small", "label": "Small · Seimbang (Recommended)"},
-    {"id": "medium", "label": "Medium · Akurasi tinggi (unduh ~770 MB)"},
-    {"id": "large-v3-turbo", "label": "Large v3 Turbo · Sangat tinggi (unduh ~810 MB)"},
+    {"id": "medium", "label": "Medium · Akurasi tinggi"},
+    {"id": "large-v3-turbo", "label": "Large v3 Turbo · Sangat tinggi"},
     {"id": "large-v3", "label": "Large v3 · Maksimal (berat di VRAM 3 GB)"},
 ]
 

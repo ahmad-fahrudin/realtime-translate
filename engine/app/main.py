@@ -113,10 +113,52 @@ class PrepareRequest(BaseModel):
     src_lang: str
     dst_lang: str
     bidirectional: bool = False
+    outgoing_voice: str = "auto"
+    incoming_voice: str = "auto"
 
 
 class WhisperModelRequest(BaseModel):
     model: str
+
+
+class VoicePrefsRequest(BaseModel):
+    outgoing_voice: str = "auto"
+    incoming_voice: str = "auto"
+
+
+def _voice_prefs_path() -> Path:
+    return Path(settings.models_dir) / "voice_prefs.json"
+
+
+def _load_voice_prefs() -> dict[str, str]:
+    default = {"outgoing_voice": "auto", "incoming_voice": "auto"}
+    path = _voice_prefs_path()
+    try:
+        if path.exists():
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                return {
+                    "outgoing_voice": str(raw.get("outgoing_voice", "auto")),
+                    "incoming_voice": str(raw.get("incoming_voice", "auto")),
+                }
+    except Exception:
+        pass
+    return default
+
+
+def _save_voice_prefs(outgoing_voice: str | None = None, incoming_voice: str | None = None) -> dict[str, str]:
+    prefs = _load_voice_prefs()
+    if outgoing_voice is not None:
+        prefs["outgoing_voice"] = outgoing_voice
+    if incoming_voice is not None:
+        prefs["incoming_voice"] = incoming_voice
+    try:
+        path = _voice_prefs_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(prefs), encoding="utf-8")
+    except OSError:
+        pass
+    return prefs
 
 
 @app.get("/")
@@ -136,7 +178,24 @@ async def health() -> dict[str, object]:
         "bridge_running": bridge.running,
         "installed_translation_pairs": engine.translator.installed_pairs(),
         "installed_tts_languages": engine.tts.installed_languages(),
+        "voice_prefs": _load_voice_prefs(),
     }
+
+
+@app.get("/voices")
+async def get_voices() -> dict[str, object]:
+    return {
+        "voices": engine.tts.list_voices_by_lang(),
+        "prefs": _load_voice_prefs(),
+    }
+
+
+@app.post("/voices/prefs")
+async def save_voices_prefs(req: VoicePrefsRequest) -> dict[str, str]:
+    bridge.update_config(
+        {"outgoing_voice": req.outgoing_voice, "incoming_voice": req.incoming_voice}
+    )
+    return _save_voice_prefs(req.outgoing_voice, req.incoming_voice)
 
 
 @app.get("/models/whisper")
@@ -315,6 +374,8 @@ async def prepare_models(req: PrepareRequest) -> dict[str, object]:
             req.bidirectional,
             cancel_ev,
             on_progress,
+            req.outgoing_voice,
+            req.incoming_voice,
         )
     except DownloadCancelled:
         await broadcast_control(
@@ -390,21 +451,31 @@ async def ws_control(ws: WebSocket) -> None:
             msg = json.loads(raw)
             cmd = msg.get("cmd")
             if cmd == "start":
-                await bridge.start(msg.get("config", {}))
+                cfg = msg.get("config", {})
+                if isinstance(cfg, dict):
+                    _save_voice_prefs(cfg.get("outgoing_voice"), cfg.get("incoming_voice"))
+                await bridge.start(cfg)
             elif cmd == "stop":
                 await bridge.stop()
             elif cmd == "update_config":
                 prev_my = bridge.config.my_lang
                 prev_peer = bridge.config.peer_lang
-                bridge.update_config(msg.get("config", {}))
+                cfg = msg.get("config", {})
+                bridge.update_config(cfg)
+                if isinstance(cfg, dict):
+                    _save_voice_prefs(cfg.get("outgoing_voice"), cfg.get("incoming_voice"))
                 if bridge.running and (
                     bridge.config.my_lang != prev_my or bridge.config.peer_lang != prev_peer
                 ):
                     await asyncio.to_thread(
-                        engine.prepare_pair, bridge.config.my_lang, bridge.config.peer_lang
-                    )
-                    await asyncio.to_thread(
-                        engine.prepare_pair, bridge.config.peer_lang, bridge.config.my_lang
+                        engine.prepare_pair,
+                        bridge.config.my_lang,
+                        bridge.config.peer_lang,
+                        True,
+                        None,
+                        None,
+                        bridge.config.outgoing_voice,
+                        bridge.config.incoming_voice,
                     )
             elif cmd == "ptt":
                 bridge.set_ptt(bool(msg.get("pressed", False)))
@@ -412,6 +483,7 @@ async def ws_control(ws: WebSocket) -> None:
                 await bridge.test_text(
                     str(msg.get("channel", "outgoing")),
                     str(msg.get("text", "")),
+                    msg.get("config") if isinstance(msg.get("config"), dict) else None,
                 )
     except WebSocketDisconnect:
         pass

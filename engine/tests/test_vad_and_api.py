@@ -89,6 +89,13 @@ def test_web_ui_and_api_endpoints():
     whisper_ids = {item["id"] for item in res_whisper.json()["models"]}
     assert {"tiny", "base", "small", "medium", "large-v3-turbo", "large-v3"}.issubset(whisper_ids)
 
+    res_voices = client.get("/voices")
+    assert res_voices.status_code == 200
+    voices_by_lang = res_voices.json()["voices"]
+    assert len(voices_by_lang["en"]) >= 2
+    assert {v["gender"] for v in voices_by_lang["en"]} == {"male", "female"}
+    assert {v["gender"] for v in voices_by_lang["id"]} == {"male", "female"}
+
 
 def test_switch_whisper_model_endpoint(monkeypatch):
     def fake_switch(model_name: str, cancel_event=None, on_progress=None):
